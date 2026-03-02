@@ -125,50 +125,59 @@ app.delete('/api/transactions/:id', (req, res) => {
         res.json({ message: 'Transaction deleted successfully' });
     });
 });
-// 🚀 استلام ومعالجة الرسائل الخام من الآيفون
+// 🚀 استلام ومعالجة الرسائل الخام من الآيفون (يدعم الراجحي والإنماء)
 app.post('/api/raw-sms', (req, res) => {
     const rawText = req.body.message;
 
-    // 1. تجاهل رسائل الرموز المؤقتة (OTP) لضمان نظافة البيانات
-    if (rawText.includes("رمز مؤقت")) {
-        console.log("⚠️ Ignored OTP message");
-        return res.json({ status: "ignored", reason: "OTP message" });
+    // 1. فلتر تجاهل الرسائل الإدارية والرموز (OTP)
+    const ignoreKeywords = ["رمز مؤقت", "رمز التفعيل", "تم تفعيل", "إضافة مستفيد", "كود"];
+    if (!rawText || rawText.trim().length < 10 || ignoreKeywords.some(key => rawText.includes(key))) {
+        console.log("⚠️ Ignored system/OTP message");
+        return res.json({ status: "ignored" });
     }
 
     console.log("📩 Processing new SMS:", rawText);
 
-    // 2. استخراج المبلغ (Amount) بدقة
-    // يبحث عن الرقم بعد "بـSAR" أو "مبلغ:SAR" أو "المبلغ:SAR"
+    // 2. استخراج المبلغ بمرونة (يدعم: ريال، SAR، بـ، مبلغ، مبلغ:)
     let amount = 0;
-    const amountMatch = rawText.match(/(?:بـSAR|مبلغ:SAR|المبلغ:SAR)\s*([\d,.]+)/);
+    // النمط الجديد يبحث عن أي رقم يأتي بعد الكلمات المفتاحية المالية
+    const amountMatch = rawText.match(/(?:مبلغ:SAR|بـSAR|المبلغ:SAR|مبلغ|بـ|SAR)\s*([\d,.]+)/i);
     if (amountMatch) {
         amount = parseFloat(amountMatch[1].replace(/,/g, ''));
     }
 
     // 3. تحديد نوع العملية (Type)
-    // إذا كانت الرسالة تحتوي على "واردة" فهي دخل (income)، غير ذلك فهي مصروف (expense)
-    const isIncome = rawText.includes("واردة") || rawText.includes("إيداع") || rawText.includes("من: شركة أطلس المستقبل");
+    const isIncome = rawText.includes("واردة") || rawText.includes("إيداع") || rawText.includes("شركة أطلس المستقبل");
     const type = isIncome ? "income" : "expense";
 
-    // 4. استخراج الوصف (Description) بناءً على نوع الرسالة
+    // 4. استخراج الوصف (Description) بذكاء متقدم
     let description = "Bank Transaction";
 
-    // جلب الاسم بعد "لـ" (للمشتريات) أو "من:" (للحوالات الواردة) أو "الى:" (للصادرة)
-    const descMatch = rawText.match(/(?:لـ|من:|الى:)\s*(.*?)(?:\s\d|\n|$|؜|;)/);
-    if (descMatch) {
-        description = descMatch[1].trim();
+    // نبحث عن الأسماء التي تأتي بعد "من" أو "لـ" أو "الى" بشرط ألا تكون أرقاماً فقط
+    // هذا النمط يتجاهل أرقام الحسابات التي تبدأ بـ * أو تحتوي على أرقام فقط
+    const nameMatches = rawText.match(/(?:لـ|من:|الى:|من)\s*([^\d\n\r;*]{3,})/gi);
+
+    if (nameMatches) {
+        // نأخذ آخر نتيجة غالباً لأنها تحتوي على اسم الطرف الآخر (تاجر أو شخص)
+        const rawName = nameMatches[nameMatches.length - 1];
+        description = rawName.replace(/(?:لـ|من:|الى:|من)/i, '').trim();
     }
 
-    // 5. حفظ البيانات في قاعدة البيانات السحابية
+    // تنظيف إضافي لرسائل المشتريات (مثل OPENAI أو Supermarket)
+    if (description.toLowerCase().includes("بطاقة")) {
+        description = "Point of Sale / Card";
+    }
+
+    // 5. حفظ البيانات في قاعدة البيانات
     const query = 'INSERT INTO Transactions (Description, Amount, TransactionDate, Category, Type) VALUES (?, ?, NOW(), ?, ?)';
-    const category = isIncome ? "Salary/Transfer" : "Shopping/Bills";
+    const category = isIncome ? "Salary/Transfer" : "General/Spending";
 
     db.query(query, [description, amount, category, type], (err, result) => {
         if (err) {
-            console.error('❌ Error processing raw SMS:', err.message);
+            console.error('❌ Error saving to DB:', err.message);
             return res.status(500).json({ error: 'Database save failed' });
         }
-        console.log(`✅ Success! ${type} of ${amount} for ${description} saved.`);
+        console.log(`✅ Recorded: ${type} | ${amount} SAR | ${description}`);
         res.json({ success: true, id: result.insertId });
     });
 });
