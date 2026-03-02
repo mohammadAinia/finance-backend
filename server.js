@@ -1,22 +1,22 @@
 const express = require('express');
-const mysql = require('mysql2'); 
+const mysql = require('mysql2');
 const cors = require('cors');
-require('dotenv').config(); 
+require('dotenv').config();
 
 const app = express();
 
 app.use(cors());
-app.use(express.json()); 
+app.use(express.json());
 
 // Database Connection Configuration
 const db = mysql.createConnection({
     host: process.env.DB_HOST,
-    port: process.env.DB_PORT, 
+    port: process.env.DB_PORT,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
-    ssl: {                    
-        rejectUnauthorized: false 
+    ssl: {
+        rejectUnauthorized: false
     }
 });
 
@@ -80,14 +80,14 @@ app.post('/api/transactions', (req, res) => {
             res.status(500).json({ error: 'Failed to save transaction' });
             return;
         }
-        
-        res.status(201).json({ 
-            Id: result.insertId, 
-            Description, 
-            Amount, 
-            TransactionDate, 
-            Category, 
-            Type 
+
+        res.status(201).json({
+            Id: result.insertId,
+            Description,
+            Amount,
+            TransactionDate,
+            Category,
+            Type
         });
     });
 });
@@ -115,7 +115,7 @@ app.delete('/api/transactions/:id', (req, res) => {
     const transactionId = req.params.id;
 
     const query = 'DELETE FROM Transactions WHERE Id=?';
-    
+
     db.query(query, [transactionId], (err, result) => {
         if (err) {
             console.error('❌ Error deleting transaction:', err.message);
@@ -125,7 +125,53 @@ app.delete('/api/transactions/:id', (req, res) => {
         res.json({ message: 'Transaction deleted successfully' });
     });
 });
+// 🚀 استلام ومعالجة الرسائل الخام من الآيفون
+app.post('/api/raw-sms', (req, res) => {
+    const rawText = req.body.message;
 
+    // 1. تجاهل رسائل الرموز المؤقتة (OTP) لضمان نظافة البيانات
+    if (rawText.includes("رمز مؤقت")) {
+        console.log("⚠️ Ignored OTP message");
+        return res.json({ status: "ignored", reason: "OTP message" });
+    }
+
+    console.log("📩 Processing new SMS:", rawText);
+
+    // 2. استخراج المبلغ (Amount) بدقة
+    // يبحث عن الرقم بعد "بـSAR" أو "مبلغ:SAR" أو "المبلغ:SAR"
+    let amount = 0;
+    const amountMatch = rawText.match(/(?:بـSAR|مبلغ:SAR|المبلغ:SAR)\s*([\d,.]+)/);
+    if (amountMatch) {
+        amount = parseFloat(amountMatch[1].replace(/,/g, ''));
+    }
+
+    // 3. تحديد نوع العملية (Type)
+    // إذا كانت الرسالة تحتوي على "واردة" فهي دخل (income)، غير ذلك فهي مصروف (expense)
+    const isIncome = rawText.includes("واردة") || rawText.includes("إيداع") || rawText.includes("من: شركة أطلس المستقبل");
+    const type = isIncome ? "income" : "expense";
+
+    // 4. استخراج الوصف (Description) بناءً على نوع الرسالة
+    let description = "Bank Transaction";
+
+    // جلب الاسم بعد "لـ" (للمشتريات) أو "من:" (للحوالات الواردة) أو "الى:" (للصادرة)
+    const descMatch = rawText.match(/(?:لـ|من:|الى:)\s*(.*?)(?:\s\d|\n|$|؜|;)/);
+    if (descMatch) {
+        description = descMatch[1].trim();
+    }
+
+    // 5. حفظ البيانات في قاعدة البيانات السحابية
+    const query = 'INSERT INTO Transactions (Description, Amount, TransactionDate, Category, Type) VALUES (?, ?, NOW(), ?, ?)';
+    const category = isIncome ? "Salary/Transfer" : "Shopping/Bills";
+
+    db.query(query, [description, amount, category, type], (err, result) => {
+        if (err) {
+            console.error('❌ Error processing raw SMS:', err.message);
+            return res.status(500).json({ error: 'Database save failed' });
+        }
+        console.log(`✅ Success! ${type} of ${amount} for ${description} saved.`);
+        res.json({ success: true, id: result.insertId });
+    });
+});
 // Dynamic Port for Cloud Deployment
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
