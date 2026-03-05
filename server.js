@@ -1,12 +1,16 @@
 const express = require('express');
 const mysql = require('mysql2');
 const cors = require('cors');
+const bcrypt = require('bcryptjs'); 
+const jwt = require('jsonwebtoken'); 
 require('dotenv').config();
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_financial_key_2024';
 
 // Database Connection Configuration
 const db = mysql.createConnection({
@@ -15,12 +19,10 @@ const db = mysql.createConnection({
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
-    ssl: {
-        rejectUnauthorized: false
-    }
+    ssl: { rejectUnauthorized: false }
 });
 
-// Connect to Database and Create Table if not exists
+// Connect to Database and Create Tables
 db.connect((err) => {
     if (err) {
         console.error('❌ Database connection failed:', err.message);
@@ -28,161 +30,212 @@ db.connect((err) => {
     }
     console.log('✅ Successfully connected to MySQL database!');
 
-    // SQL query to create the table automatically
-    const createTableQuery = `
+    // 1. إنشاء جدول المستخدمين أولاً
+    const createUsersTable = `
+        CREATE TABLE IF NOT EXISTS Users (
+            Id INT AUTO_INCREMENT PRIMARY KEY,
+            Username VARCHAR(50) UNIQUE NOT NULL,
+            PasswordHash VARCHAR(255) NOT NULL,
+            Role VARCHAR(20) DEFAULT 'user'
+        )
+    `;
+
+    // 2. إنشاء جدول العمليات (تمت إضافة UserId كـ Foreign Key)
+    const createTransactionsTable = `
         CREATE TABLE IF NOT EXISTS Transactions (
             Id INT AUTO_INCREMENT PRIMARY KEY,
+            UserId INT NOT NULL,
             Description VARCHAR(255) NOT NULL,
             Amount DECIMAL(10, 2) NOT NULL,
             TransactionDate DATE NOT NULL,
             Category VARCHAR(100) NOT NULL,
-            Type VARCHAR(50) NOT NULL
+            Type VARCHAR(50) NOT NULL,
+            FOREIGN KEY (UserId) REFERENCES Users(Id) ON DELETE CASCADE
         )
     `;
 
-    db.query(createTableQuery, (err, result) => {
-        if (err) {
-            console.error('❌ Error creating table:', err.message);
-        } else {
-            console.log('✅ Transactions table is ready!');
+    // تنفيذ إنشاء الجداول بالترتيب الصحيح
+    db.query(createUsersTable, (err) => {
+        if (err) console.error('❌ Error creating Users table:', err.message);
+        else {
+            console.log('✅ Users table is ready!');
+            
+            db.query(createTransactionsTable, (err) => {
+                if (err) console.error('❌ Error creating Transactions table:', err.message);
+                else console.log('✅ Transactions table is ready!');
+            });
         }
     });
 });
 
-// Root Route
-app.get('/', (req, res) => {
-    res.send('Welcome to the Financial Management App Backend!');
+// ==========================================
+// 🛡️ Middleware: للتحقق من هوية المستخدم (حارس الباك إند)
+// ==========================================
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // استخراج التوكن
+
+    if (!token) return res.status(401).json({ error: 'غير مصرح لك، يرجى تسجيل الدخول' });
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) return res.status(403).json({ error: 'انتهت صلاحية الجلسة' });
+        req.user = user; // { id, username, role } سنستخدم req.user.id لاحقاً
+        next();
+    });
+};
+
+// ==========================================
+// 🔐 نظام الحسابات (Authentication)
+// ==========================================
+
+// 🆕 مسار إنشاء حساب جديد (Register)
+app.post('/api/auth/register', async (req, res) => {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+        return res.status(400).json({ error: 'مطلوب إدخال اسم المستخدم وكلمة المرور' });
+    }
+
+    try {
+        const salt = await bcrypt.genSalt(10);
+        const passwordHash = await bcrypt.hash(password, salt);
+
+        const query = 'INSERT INTO Users (Username, PasswordHash) VALUES (?, ?)';
+        db.query(query, [username, passwordHash], (err, result) => {
+            if (err) {
+                if (err.code === 'ER_DUP_ENTRY') return res.status(400).json({ error: 'اسم المستخدم مسجل مسبقاً' });
+                return res.status(500).json({ error: 'Database error' });
+            }
+            res.status(201).json({ message: 'تم إنشاء الحساب بنجاح!' });
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Server error' });
+    }
 });
 
-// Get all transactions
-app.get('/api/transactions', (req, res) => {
-    const query = 'SELECT * FROM Transactions ORDER BY Id DESC';
-    db.query(query, (err, results) => {
-        if (err) {
-            console.error('❌ Error fetching transactions:', err.message);
-            res.status(500).json({ error: 'Failed to fetch transactions' });
-            return;
-        }
+// مسار تسجيل الدخول (Login)
+app.post('/api/auth/login', (req, res) => {
+    const { username, password } = req.body;
+
+    const query = 'SELECT * FROM Users WHERE Username = ?';
+    db.query(query, [username], async (err, results) => {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        if (results.length === 0) return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+
+        const user = results[0];
+        const isMatch = await bcrypt.compare(password, user.PasswordHash);
+        if (!isMatch) return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+
+        const token = jwt.sign(
+            { id: user.Id, username: user.Username, role: user.Role },
+            JWT_SECRET,
+            { expiresIn: '24h' }
+        );
+
+        res.json({ message: 'تم الدخول بنجاح', token, user: { username: user.Username, id: user.Id } });
+    });
+});
+
+// ==========================================
+// 💰 مسارات العمليات المالية (محمية بالـ authenticateToken)
+// ==========================================
+
+// جلب عمليات المستخدم الذي سجل دخوله فقط
+app.get('/api/transactions', authenticateToken, (req, res) => {
+    const userId = req.user.id; // أخذنا رقم المستخدم من التوكن
+    const query = 'SELECT * FROM Transactions WHERE UserId = ? ORDER BY TransactionDate DESC, Id DESC';
+    
+    db.query(query, [userId], (err, results) => {
+        if (err) return res.status(500).json({ error: 'Failed to fetch transactions' });
         res.json(results);
     });
 });
 
-// Create a new transaction
-app.post('/api/transactions', (req, res) => {
+// إضافة عملية مالية جديدة وربطها بالمستخدم
+app.post('/api/transactions', authenticateToken, (req, res) => {
+    const userId = req.user.id;
     const { Description, Amount, TransactionDate, Category, Type } = req.body;
 
-    const query = 'INSERT INTO Transactions (Description, Amount, TransactionDate, Category, Type) VALUES (?, ?, ?, ?, ?)';
-    const values = [Description, Amount, TransactionDate, Category, Type];
+    const query = 'INSERT INTO Transactions (UserId, Description, Amount, TransactionDate, Category, Type) VALUES (?, ?, ?, ?, ?, ?)';
+    const values = [userId, Description, Amount, TransactionDate, Category, Type];
 
     db.query(query, values, (err, result) => {
-        if (err) {
-            console.error('❌ Error saving transaction:', err.message);
-            res.status(500).json({ error: 'Failed to save transaction' });
-            return;
-        }
-
-        res.status(201).json({
-            Id: result.insertId,
-            Description,
-            Amount,
-            TransactionDate,
-            Category,
-            Type
-        });
+        if (err) return res.status(500).json({ error: 'Failed to save transaction' });
+        res.status(201).json({ Id: result.insertId, UserId: userId, Description, Amount, TransactionDate, Category, Type });
     });
 });
 
-// Update an existing transaction
-app.put('/api/transactions/:id', (req, res) => {
+// تحديث عملية مالية (بشرط أن تكون تابعة للمستخدم نفسه)
+app.put('/api/transactions/:id', authenticateToken, (req, res) => {
     const transactionId = req.params.id;
+    const userId = req.user.id;
     const { Description, Amount, TransactionDate, Category, Type } = req.body;
 
-    const query = 'UPDATE Transactions SET Description=?, Amount=?, TransactionDate=?, Category=?, Type=? WHERE Id=?';
-    const values = [Description, Amount, TransactionDate, Category, Type, transactionId];
+    const query = 'UPDATE Transactions SET Description=?, Amount=?, TransactionDate=?, Category=?, Type=? WHERE Id=? AND UserId=?';
+    const values = [Description, Amount, TransactionDate, Category, Type, transactionId, userId];
 
     db.query(query, values, (err, result) => {
-        if (err) {
-            console.error('❌ Error updating transaction:', err.message);
-            res.status(500).json({ error: 'Failed to update transaction' });
-            return;
-        }
+        if (err) return res.status(500).json({ error: 'Failed to update transaction' });
         res.json({ message: 'Transaction updated successfully' });
     });
 });
 
-// Delete a transaction
-app.delete('/api/transactions/:id', (req, res) => {
+// حذف عملية مالية (بشرط أن تكون تابعة للمستخدم نفسه)
+app.delete('/api/transactions/:id', authenticateToken, (req, res) => {
     const transactionId = req.params.id;
+    const userId = req.user.id;
 
-    const query = 'DELETE FROM Transactions WHERE Id=?';
+    const query = 'DELETE FROM Transactions WHERE Id=? AND UserId=?';
 
-    db.query(query, [transactionId], (err, result) => {
-        if (err) {
-            console.error('❌ Error deleting transaction:', err.message);
-            res.status(500).json({ error: 'Failed to delete transaction' });
-            return;
-        }
+    db.query(query, [transactionId, userId], (err, result) => {
+        if (err) return res.status(500).json({ error: 'Failed to delete transaction' });
         res.json({ message: 'Transaction deleted successfully' });
     });
 });
-// 🚀 استلام ومعالجة الرسائل الخام من الآيفون (يدعم الراجحي والإنماء)
-app.post('/api/raw-sms', (req, res) => {
-    const rawText = req.body.message;
 
-    // 1. فلتر تجاهل الرسائل الإدارية والرموز (OTP)
+// ==========================================
+// 🚀 استلام الرسائل الخام من الآيفون
+// ==========================================
+app.post('/api/raw-sms', (req, res) => {
+    // ⚠️ ملاحظة: يجب تعديل اختصار الآيفون ليرسل userId مع رسالة الـ SMS
+    const { message: rawText, userId } = req.body; 
+
+    if (!userId) {
+        return res.status(400).json({ error: 'مطلوب إرسال رقم المستخدم (userId) مع الرسالة' });
+    }
+
     const ignoreKeywords = ["رمز مؤقت", "رمز التفعيل", "تم تفعيل", "إضافة مستفيد", "كود"];
     if (!rawText || rawText.trim().length < 10 || ignoreKeywords.some(key => rawText.includes(key))) {
-        console.log("⚠️ Ignored system/OTP message");
         return res.json({ status: "ignored" });
     }
 
-    console.log("📩 Processing new SMS:", rawText);
-
-    // 2. استخراج المبلغ بمرونة (يدعم: ريال، SAR، بـ، مبلغ، مبلغ:)
     let amount = 0;
-    // النمط الجديد يبحث عن أي رقم يأتي بعد الكلمات المفتاحية المالية
     const amountMatch = rawText.match(/(?:مبلغ:SAR|بـSAR|المبلغ:SAR|مبلغ|بـ|SAR)\s*([\d,.]+)/i);
-    if (amountMatch) {
-        amount = parseFloat(amountMatch[1].replace(/,/g, ''));
-    }
+    if (amountMatch) amount = parseFloat(amountMatch[1].replace(/,/g, ''));
 
-    // 3. تحديد نوع العملية (Type)
-    const isIncome = rawText.includes("واردة") || rawText.includes("إيداع") || rawText.includes("شركة أطلس المستقبل");
+    const isIncome = rawText.includes("واردة") || rawText.includes("إيداع");
     const type = isIncome ? "income" : "expense";
-
-    // 4. استخراج الوصف (Description) بذكاء متقدم
     let description = "Bank Transaction";
 
-    // نبحث عن الأسماء التي تأتي بعد "من" أو "لـ" أو "الى" بشرط ألا تكون أرقاماً فقط
-    // هذا النمط يتجاهل أرقام الحسابات التي تبدأ بـ * أو تحتوي على أرقام فقط
     const nameMatches = rawText.match(/(?:لـ|من:|الى:|من)\s*([^\d\n\r;*]{3,})/gi);
-
     if (nameMatches) {
-        // نأخذ آخر نتيجة غالباً لأنها تحتوي على اسم الطرف الآخر (تاجر أو شخص)
         const rawName = nameMatches[nameMatches.length - 1];
         description = rawName.replace(/(?:لـ|من:|الى:|من)/i, '').trim();
     }
+    if (description.toLowerCase().includes("بطاقة")) description = "Point of Sale / Card";
 
-    // تنظيف إضافي لرسائل المشتريات (مثل OPENAI أو Supermarket)
-    if (description.toLowerCase().includes("بطاقة")) {
-        description = "Point of Sale / Card";
-    }
-
-    // 5. حفظ البيانات في قاعدة البيانات
-    const query = 'INSERT INTO Transactions (Description, Amount, TransactionDate, Category, Type) VALUES (?, ?, NOW(), ?, ?)';
     const category = isIncome ? "Salary/Transfer" : "General/Spending";
 
-    db.query(query, [description, amount, category, type], (err, result) => {
-        if (err) {
-            console.error('❌ Error saving to DB:', err.message);
-            return res.status(500).json({ error: 'Database save failed' });
-        }
-        console.log(`✅ Recorded: ${type} | ${amount} SAR | ${description}`);
+    // إدخال العملية مع رقم المستخدم userId
+    const query = 'INSERT INTO Transactions (UserId, Description, Amount, TransactionDate, Category, Type) VALUES (?, ?, ?, NOW(), ?, ?)';
+    db.query(query, [userId, description, amount, category, type], (err, result) => {
+        if (err) return res.status(500).json({ error: 'Database save failed' });
         res.json({ success: true, id: result.insertId });
     });
 });
-// Dynamic Port for Cloud Deployment
-const PORT = process.env.PORT || 3000;
+
+// Dynamic Port
+const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`🚀 Server is now running on port: ${PORT}`);
 });
