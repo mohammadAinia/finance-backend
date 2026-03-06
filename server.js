@@ -114,17 +114,22 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 // مسار تسجيل الدخول (Login)
+// مسار تسجيل الدخول (Login)
 app.post('/api/auth/login', (req, res) => {
     const { username, password } = req.body;
 
     const query = 'SELECT * FROM Users WHERE Username = ?';
     db.query(query, [username], async (err, results) => {
         if (err) return res.status(500).json({ error: 'Database error' });
-        if (results.length === 0) return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+        
+        // 👇 تعديل الرسالة هنا لتكون صريحة عند عدم وجود الحساب
+        if (results.length === 0) return res.status(404).json({ error: 'لا يوجد حساب مسجل بهذا الاسم' });
 
         const user = results[0];
         const isMatch = await bcrypt.compare(password, user.PasswordHash);
-        if (!isMatch) return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+        
+        // 👇 وتعديل الرسالة هنا عند خطأ كلمة المرور
+        if (!isMatch) return res.status(401).json({ error: 'كلمة المرور غير صحيحة' });
 
         const token = jwt.sign(
             { id: user.Id, username: user.Username, role: user.Role },
@@ -194,15 +199,14 @@ app.delete('/api/transactions/:id', authenticateToken, (req, res) => {
 });
 
 // ==========================================
-// 🚀 استلام الرسائل الخام من الآيفون
+// 🚀 استلام الرسائل الخام من الآيفون (محمية ومربوطة بالمستخدم)
 // ==========================================
-app.post('/api/raw-sms', (req, res) => {
-    // ⚠️ ملاحظة: يجب تعديل اختصار الآيفون ليرسل userId مع رسالة الـ SMS
-    const { message: rawText, userId } = req.body; 
-
-    if (!userId) {
-        return res.status(400).json({ error: 'مطلوب إرسال رقم المستخدم (userId) مع الرسالة' });
-    }
+// 👇 أضفنا authenticateToken هنا لحماية المسار
+app.post('/api/raw-sms', authenticateToken, (req, res) => {
+    
+    // 👇 لم نعد بحاجة لاستقبال userId من الهاتف، السيرفر سيعرفه فوراً من التوكن!
+    const { message: rawText } = req.body; 
+    const userId = req.user.id; // استخراج رقم المستخدم بأمان من التوكن
 
     const ignoreKeywords = ["رمز مؤقت", "رمز التفعيل", "تم تفعيل", "إضافة مستفيد", "كود"];
     if (!rawText || rawText.trim().length < 10 || ignoreKeywords.some(key => rawText.includes(key))) {
@@ -226,7 +230,7 @@ app.post('/api/raw-sms', (req, res) => {
 
     const category = isIncome ? "Salary/Transfer" : "General/Spending";
 
-    // إدخال العملية مع رقم المستخدم userId
+    // 👇 إدخال العملية مع رقم المستخدم المستخرج من التوكن
     const query = 'INSERT INTO Transactions (UserId, Description, Amount, TransactionDate, Category, Type) VALUES (?, ?, ?, NOW(), ?, ?)';
     db.query(query, [userId, description, amount, category, type], (err, result) => {
         if (err) return res.status(500).json({ error: 'Database save failed' });
