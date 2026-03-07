@@ -112,8 +112,6 @@ app.post('/api/auth/register', async (req, res) => {
         res.status(500).json({ error: 'Server error' });
     }
 });
-
-// مسار تسجيل الدخول (Login)
 // مسار تسجيل الدخول (Login)
 app.post('/api/auth/login', (req, res) => {
     const { username, password } = req.body;
@@ -121,23 +119,30 @@ app.post('/api/auth/login', (req, res) => {
     const query = 'SELECT * FROM Users WHERE Username = ?';
     db.query(query, [username], async (err, results) => {
         if (err) return res.status(500).json({ error: 'Database error' });
-
-        // 👇 تعديل الرسالة هنا لتكون صريحة عند عدم وجود الحساب
+        
         if (results.length === 0) return res.status(404).json({ error: 'لا يوجد حساب مسجل بهذا الاسم' });
 
         const user = results[0];
         const isMatch = await bcrypt.compare(password, user.PasswordHash);
-
-        // 👇 وتعديل الرسالة هنا عند خطأ كلمة المرور
+        
         if (!isMatch) return res.status(401).json({ error: 'كلمة المرور غير صحيحة' });
 
+        // 1. التوكن المؤقت (لواجهة الموقع - 24 ساعة)
         const token = jwt.sign(
             { id: user.Id, username: user.Username, role: user.Role },
             JWT_SECRET,
             { expiresIn: '24h' }
         );
 
-        res.json({ message: 'تم الدخول بنجاح', token, user: { username: user.Username, id: user.Id } });
+        // 2. التوكن الدائم (للاختصارات - 10 سنوات)
+        const mobileToken = jwt.sign(
+            { id: user.Id, username: user.Username, role: user.Role },
+            JWT_SECRET,
+            { expiresIn: '3650d' }
+        );
+
+        // إرسال الاثنين معاً
+        res.json({ message: 'تم الدخول بنجاح', token, mobileToken, user: { username: user.Username, id: user.Id } });
     });
 });
 
