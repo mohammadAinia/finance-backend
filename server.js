@@ -1,8 +1,8 @@
 const express = require('express');
 const mysql = require('mysql2');
 const cors = require('cors');
-const bcrypt = require('bcryptjs'); 
-const jwt = require('jsonwebtoken'); 
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const app = express();
@@ -59,7 +59,7 @@ db.connect((err) => {
         if (err) console.error('❌ Error creating Users table:', err.message);
         else {
             console.log('✅ Users table is ready!');
-            
+
             db.query(createTransactionsTable, (err) => {
                 if (err) console.error('❌ Error creating Transactions table:', err.message);
                 else console.log('✅ Transactions table is ready!');
@@ -121,13 +121,13 @@ app.post('/api/auth/login', (req, res) => {
     const query = 'SELECT * FROM Users WHERE Username = ?';
     db.query(query, [username], async (err, results) => {
         if (err) return res.status(500).json({ error: 'Database error' });
-        
+
         // 👇 تعديل الرسالة هنا لتكون صريحة عند عدم وجود الحساب
         if (results.length === 0) return res.status(404).json({ error: 'لا يوجد حساب مسجل بهذا الاسم' });
 
         const user = results[0];
         const isMatch = await bcrypt.compare(password, user.PasswordHash);
-        
+
         // 👇 وتعديل الرسالة هنا عند خطأ كلمة المرور
         if (!isMatch) return res.status(401).json({ error: 'كلمة المرور غير صحيحة' });
 
@@ -142,6 +142,22 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // ==========================================
+// 📱 مسار إصدار رمز الآيفون طويل الأمد (Personal Access Token)
+// ==========================================
+app.get('/api/auth/mobile-token', authenticateToken, (req, res) => {
+    // نأخذ بيانات المستخدم من التوكن العادي (الصالح حالياً)
+    const user = req.user;
+
+    // نصدر توكن جديد ينتهي بعد 10 سنوات (3650d) مخصص فقط للآيفون
+    const mobileToken = jwt.sign(
+        { id: user.id, username: user.username, role: user.role },
+        JWT_SECRET,
+        { expiresIn: '3650d' }
+    );
+
+    res.json({ mobileToken });
+});
+// ==========================================
 // 💰 مسارات العمليات المالية (محمية بالـ authenticateToken)
 // ==========================================
 
@@ -149,7 +165,7 @@ app.post('/api/auth/login', (req, res) => {
 app.get('/api/transactions', authenticateToken, (req, res) => {
     const userId = req.user.id; // أخذنا رقم المستخدم من التوكن
     const query = 'SELECT * FROM Transactions WHERE UserId = ? ORDER BY TransactionDate DESC, Id DESC';
-    
+
     db.query(query, [userId], (err, results) => {
         if (err) return res.status(500).json({ error: 'Failed to fetch transactions' });
         res.json(results);
@@ -203,9 +219,9 @@ app.delete('/api/transactions/:id', authenticateToken, (req, res) => {
 // ==========================================
 // 👇 أضفنا authenticateToken هنا لحماية المسار
 app.post('/api/raw-sms', authenticateToken, (req, res) => {
-    
+
     // 👇 لم نعد بحاجة لاستقبال userId من الهاتف، السيرفر سيعرفه فوراً من التوكن!
-    const { message: rawText } = req.body; 
+    const { message: rawText } = req.body;
     const userId = req.user.id; // استخراج رقم المستخدم بأمان من التوكن
 
     const ignoreKeywords = ["رمز مؤقت", "رمز التفعيل", "تم تفعيل", "إضافة مستفيد", "كود"];
