@@ -229,26 +229,37 @@ app.delete('/api/transactions/:id', authenticateToken, (req, res) => {
 });
 
 // ==========================================
-// 🚀 استلام الرسائل الخام من الآيفون (نسخة الذكاء الاصطناعي الخارقة)
+// 🚀 استلام الرسائل الخام من الآيفون (النسخة المزودة بنظام التتبع الشامل)
 // ==========================================
-app.post('/api/raw-sms', authenticateToken, async (req, res) => { // 👈 أضفنا async هنا
+app.post('/api/raw-sms', authenticateToken, async (req, res) => {
+    console.log("\n==============================================");
+    console.log("📥 [1] استلام رسالة جديدة من الآيفون...");
+    
     const { message: rawText } = req.body;
     const userId = req.user.id;
+    console.log("✉️ نص الرسالة:", rawText.replace(/\n/g, ' ')); // طباعة الرسالة في سطر واحد
 
-    // 1. تجاهل رسائل التفعيل والرموز
+    // 1. تجاهل رسائل التفعيل
     const ignoreKeywords = ["رمز مؤقت", "رمز التفعيل", "تم تفعيل", "إضافة مستفيد", "كود", "OTP", "رمز"];
     if (!rawText || rawText.trim().length < 10 || ignoreKeywords.some(key => rawText.includes(key))) {
+        console.log("🚫 [2] تم تجاهل الرسالة (تفعيل أو قصيرة جداً).");
         return res.json({ status: "ignored" });
     }
 
     // 2. استخراج المبلغ
     let amount = 0;
     const amountMatch = rawText.match(/(?:مبلغ|بـ|SAR)\s*:?\s*([\d,.]+)/i) || rawText.match(/([\d,.]+)\s*(?:ريال|SAR)/i);
-    if (amountMatch) amount = parseFloat(amountMatch[1].replace(/,/g, ''));
+    if (amountMatch) {
+        amount = parseFloat(amountMatch[1].replace(/,/g, ''));
+        console.log(`💰 [3] تم استخراج المبلغ بنجاح: ${amount}`);
+    } else {
+        console.log("⚠️ [3] لم يتمكن النظام من استخراج المبلغ!");
+    }
 
-    // 3. تحديد نوع العملية (دخل أم مصروف)
+    // 3. تحديد نوع العملية
     const isIncome = rawText.includes("واردة") || rawText.includes("إيداع") || rawText.includes("استرجاع");
     const type = isIncome ? "income" : "expense";
+    console.log(`🔄 [4] نوع العملية: ${type}`);
 
     // 4. الاستخراج المبدئي للاسم
     let description = "عملية بنكية";
@@ -260,6 +271,7 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => { // 👈 أضف
         if (toMatch && toMatch[1].trim().length > 2) description = toMatch[1].trim();
     }
     description = description.replace(/حساب.*/g, '').trim();
+    console.log(`📝 [5] الوصف المبدئي للجهة: ${description}`);
 
     // 5. استخراج طريقة الدفع
     let paymentMethod = 'Bank Transfer';
@@ -269,12 +281,13 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => { // 👈 أضف
     } else if (textLower.includes("بطاقة") || textLower.includes("مدى") || textLower.includes("نقاط بيع") || textLower.includes("شراء")) {
         paymentMethod = 'Card';
     }
+    console.log(`💳 [6] طريقة الدفع: ${paymentMethod}`);
 
-    // 6. التصنيف المبدئي الثابت (الكلمات المفتاحية الواضحة جداً لتوفير الـ AI)
+    // 6. التصنيف المبدئي
     let category = isIncome ? "حوالات واردة" : "مصروفات عامة";
     let subCategory = "عام";
     let isRecurring = false;
-    let needsAI = true; // 👈 متغير يحدد هل نحتاج الذكاء الاصطناعي أم لا
+    let needsAI = true;
 
     const descLower = description.toLowerCase() + " " + textLower;
 
@@ -288,38 +301,42 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => { // 👈 أضف
         category = "المنزل والمقاضي"; subCategory = "سوبر ماركت"; needsAI = false;
     }
 
-    // 7. 🤖 الاستعانة بالذكاء الاصطناعي إذا كانت العملية مبهمة (مثل Abdulsama)
+    console.log(`🗂️ [7] التصنيف الأولي: ${category} -> ${subCategory} | هل يحتاج AI؟ ${needsAI ? 'نعم' : 'لا'}`);
+
+    // 7. 🤖 الاستعانة بالذكاء الاصطناعي
     if (needsAI && !isIncome) {
         try {
+            console.log("🤖 [8] جاري إرسال العملية لـ Gemini للتحليل...");
             const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
             
             const prompt = `أنت خبير مالي في السعودية. هذه رسالة بنكية: "${rawText}". 
-            استخرج اسم المتجر وصنفه. أمثلة: "Abdulsama" هو عبدالصمد القرشي، "TAJ ALHAL" هو تاج الحلا، "ALMTNHAB R" هو محل تمور.
-            أريد الرد فقط بصيغة JSON خالية من أي نصوص أخرى، بهذا الشكل حصراً:
-            {"CleanName": "اسم المحل الواضح بالعربية", "Category": "التصنيف الأساسي (مثل: تسوق، طعام، صحة)", "SubCategory": "التصنيف الفرعي"}`;
+            استخرج اسم المتجر وصنفه. أمثلة: "Abdulsama" هو عبدالصمد القرشي.
+            أريد الرد فقط بصيغة JSON خالية من أي نصوص أخرى، بهذا الشكل:
+            {"CleanName": "اسم المحل الواضح", "Category": "التصنيف", "SubCategory": "التصنيف الفرعي"}`;
 
             const response = await ai.models.generateContent({
                 model: "gemini-3-flash-preview",
                 contents: prompt,
             });
 
-            // تنظيف نص الـ AI من علامات الماركداون (```json ... ```)
             let aiText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
-            const aiData = JSON.parse(aiText);
+            console.log("🤖 [8] رد Gemini الخام:", aiText);
 
+            const aiData = JSON.parse(aiText);
             if (aiData.CleanName) description = aiData.CleanName;
             if (aiData.Category) category = aiData.Category;
             if (aiData.SubCategory) subCategory = aiData.SubCategory;
 
-            console.log("🤖 AI Parsed Transaction:", aiData); // لمعرفة ماذا فكر الـ AI في السيرفر
+            console.log(`✅ [8] نجح تحليل AI: تم تعديل الوصف إلى (${description})`);
 
         } catch (error) {
-            console.error("AI Parsing Error, falling back to default:", error.message);
-            // إذا فشل الذكاء الاصطناعي (مثل الخطأ 503)، سيكمل التطبيق بالتصنيف الافتراضي ولن يتوقف
+            // 🔴 إذا تعطل جوجل، السيرفر لن يموت، سيكمل حفظ العملية بالتصنيف الافتراضي
+            console.error("⚠️ [8] فشل الاتصال بالـ AI، سيتم الحفظ بالتصنيف الافتراضي. السبب:", error.message);
         }
     }
 
     // 8. الحفظ في قاعدة البيانات
+    console.log("💾 [9] جاري الحفظ في قاعدة البيانات...");
     const query = `
         INSERT INTO Transactions 
         (UserId, Amount, Type, Category, SubCategory, Description, TransactionDate, PaymentMethod, IsRecurring, Source) 
@@ -328,9 +345,11 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => { // 👈 أضف
     
     db.query(query, [userId, amount, type, category, subCategory, description, paymentMethod, isRecurring ? 1 : 0], (err, result) => {
         if (err) {
-            console.error("SMS DB Error:", err);
-            return res.status(500).json({ error: 'Database save failed' });
+            console.error("❌ [10] خطأ كارثي أثناء الحفظ في قاعدة البيانات:", err.message);
+            return res.status(500).json({ error: 'Database save failed', details: err.message });
         }
+        console.log(`🎉 [10] تمت الإضافة بنجاح! رقم العملية: ${result.insertId}`);
+        console.log("==============================================\n");
         res.json({ success: true, id: result.insertId });
     });
 });
