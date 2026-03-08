@@ -229,48 +229,108 @@ app.delete('/api/transactions/:id', authenticateToken, (req, res) => {
 });
 
 // ==========================================
-// 🚀 استلام الرسائل الخام من الآيفون
+// 🚀 استلام الرسائل الخام من الآيفون (نسخة الذكاء الاصطناعي الخارقة)
 // ==========================================
-app.post('/api/raw-sms', authenticateToken, (req, res) => {
+app.post('/api/raw-sms', authenticateToken, async (req, res) => { // 👈 أضفنا async هنا
     const { message: rawText } = req.body;
     const userId = req.user.id;
 
-    const ignoreKeywords = ["رمز مؤقت", "رمز التفعيل", "تم تفعيل", "إضافة مستفيد", "كود"];
+    // 1. تجاهل رسائل التفعيل والرموز
+    const ignoreKeywords = ["رمز مؤقت", "رمز التفعيل", "تم تفعيل", "إضافة مستفيد", "كود", "OTP", "رمز"];
     if (!rawText || rawText.trim().length < 10 || ignoreKeywords.some(key => rawText.includes(key))) {
         return res.json({ status: "ignored" });
     }
 
+    // 2. استخراج المبلغ
     let amount = 0;
-    const amountMatch = rawText.match(/(?:مبلغ:SAR|بـSAR|المبلغ:SAR|مبلغ|بـ|SAR)\s*([\d,.]+)/i);
+    const amountMatch = rawText.match(/(?:مبلغ|بـ|SAR)\s*:?\s*([\d,.]+)/i) || rawText.match(/([\d,.]+)\s*(?:ريال|SAR)/i);
     if (amountMatch) amount = parseFloat(amountMatch[1].replace(/,/g, ''));
 
-    const isIncome = rawText.includes("واردة") || rawText.includes("إيداع");
+    // 3. تحديد نوع العملية (دخل أم مصروف)
+    const isIncome = rawText.includes("واردة") || rawText.includes("إيداع") || rawText.includes("استرجاع");
     const type = isIncome ? "income" : "expense";
-    let description = "Bank Transaction";
 
-    const nameMatches = rawText.match(/(?:لـ|من:|الى:|من)\s*([^\d\n\r;*]{3,})/gi);
-    if (nameMatches) {
-        const rawName = nameMatches[nameMatches.length - 1];
-        description = rawName.replace(/(?:لـ|من:|الى:|من)/i, '').trim();
+    // 4. الاستخراج المبدئي للاسم
+    let description = "عملية بنكية";
+    if (rawText.includes("من ")) {
+        const fromMatch = rawText.match(/من\s+([A-Za-z\u0600-\u06FF0-9\s*_-]+)(?:\n|\r|في|حساب|مبلغ|؜)/i);
+        if (fromMatch && fromMatch[1].trim().length > 2) description = fromMatch[1].trim();
+    } else if (rawText.includes("لـ ") || rawText.includes("الى:")) {
+        const toMatch = rawText.match(/(?:لـ|الى:)\s*([A-Za-z\u0600-\u06FF0-9\s*_-]+)(?:\n|\r|في|حساب|؜)/i);
+        if (toMatch && toMatch[1].trim().length > 2) description = toMatch[1].trim();
     }
-    
+    description = description.replace(/حساب.*/g, '').trim();
+
+    // 5. استخراج طريقة الدفع
     let paymentMethod = 'Bank Transfer';
-    if (description.toLowerCase().includes("بطاقة")) {
-        description = "Point of Sale";
+    const textLower = rawText.toLowerCase();
+    if (textLower.includes("applepay") || textLower.includes("ابل باي")) {
+        paymentMethod = 'Apple Pay';
+    } else if (textLower.includes("بطاقة") || textLower.includes("مدى") || textLower.includes("نقاط بيع") || textLower.includes("شراء")) {
         paymentMethod = 'Card';
     }
 
-    const category = isIncome ? "Salary/Transfer" : "General/Spending";
+    // 6. التصنيف المبدئي الثابت (الكلمات المفتاحية الواضحة جداً لتوفير الـ AI)
+    let category = isIncome ? "حوالات واردة" : "مصروفات عامة";
+    let subCategory = "عام";
+    let isRecurring = false;
+    let needsAI = true; // 👈 متغير يحدد هل نحتاج الذكاء الاصطناعي أم لا
 
-    // إضافة العملية مع تحديد المصدر كـ SMS
+    const descLower = description.toLowerCase() + " " + textLower;
+
+    if (descLower.includes("أطلس المستقبل") || descLower.includes("راتب")) {
+        category = "الراتب والدخل"; subCategory = "راتب العمل"; needsAI = false;
+    } else if (descLower.includes("openai") || descLower.includes("netflix") || descLower.includes("stc")) {
+        category = "فواتير واشتراكات"; subCategory = "اشتراكات رقمية"; isRecurring = true; needsAI = false;
+    } else if (descLower.includes("fuel") || descLower.includes("محطة")) {
+        category = "السيارة والمواصلات"; subCategory = "بنزين"; needsAI = false;
+    } else if (descLower.includes("بقالة") || descLower.includes("supermarket")) {
+        category = "المنزل والمقاضي"; subCategory = "سوبر ماركت"; needsAI = false;
+    }
+
+    // 7. 🤖 الاستعانة بالذكاء الاصطناعي إذا كانت العملية مبهمة (مثل Abdulsama)
+    if (needsAI && !isIncome) {
+        try {
+            const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+            
+            const prompt = `أنت خبير مالي في السعودية. هذه رسالة بنكية: "${rawText}". 
+            استخرج اسم المتجر وصنفه. أمثلة: "Abdulsama" هو عبدالصمد القرشي، "TAJ ALHAL" هو تاج الحلا، "ALMTNHAB R" هو محل تمور.
+            أريد الرد فقط بصيغة JSON خالية من أي نصوص أخرى، بهذا الشكل حصراً:
+            {"CleanName": "اسم المحل الواضح بالعربية", "Category": "التصنيف الأساسي (مثل: تسوق، طعام، صحة)", "SubCategory": "التصنيف الفرعي"}`;
+
+            const response = await ai.models.generateContent({
+                model: "gemini-3-flash-preview",
+                contents: prompt,
+            });
+
+            // تنظيف نص الـ AI من علامات الماركداون (```json ... ```)
+            let aiText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
+            const aiData = JSON.parse(aiText);
+
+            if (aiData.CleanName) description = aiData.CleanName;
+            if (aiData.Category) category = aiData.Category;
+            if (aiData.SubCategory) subCategory = aiData.SubCategory;
+
+            console.log("🤖 AI Parsed Transaction:", aiData); // لمعرفة ماذا فكر الـ AI في السيرفر
+
+        } catch (error) {
+            console.error("AI Parsing Error, falling back to default:", error.message);
+            // إذا فشل الذكاء الاصطناعي (مثل الخطأ 503)، سيكمل التطبيق بالتصنيف الافتراضي ولن يتوقف
+        }
+    }
+
+    // 8. الحفظ في قاعدة البيانات
     const query = `
         INSERT INTO Transactions 
-        (UserId, Amount, Type, Category, SubCategory, Description, TransactionDate, PaymentMethod, Source) 
-        VALUES (?, ?, ?, ?, 'بنك', ?, NOW(), ?, 'SMS')
+        (UserId, Amount, Type, Category, SubCategory, Description, TransactionDate, PaymentMethod, IsRecurring, Source) 
+        VALUES (?, ?, ?, ?, ?, ?, NOW(), ?, ?, 'SMS')
     `;
     
-    db.query(query, [userId, amount, type, category, description, paymentMethod], (err, result) => {
-        if (err) return res.status(500).json({ error: 'Database save failed' });
+    db.query(query, [userId, amount, type, category, subCategory, description, paymentMethod, isRecurring ? 1 : 0], (err, result) => {
+        if (err) {
+            console.error("SMS DB Error:", err);
+            return res.status(500).json({ error: 'Database save failed' });
+        }
         res.json({ success: true, id: result.insertId });
     });
 });
