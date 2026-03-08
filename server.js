@@ -301,7 +301,7 @@ app.get('/api/advisor', authenticateToken, (req, res) => {
         اكتب نصيحة مالية واحدة ذكية ومباشرة باللغة العربية (سطرين كحد أقصى). 
         كن مشجعاً، وإذا كان الصرف أعلى من الدخل حذره بلطف. لا تستخدم أي مقدمات مثل "بناءً على البيانات".`;
 
-        try {
+try {
             const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
             const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
             
@@ -311,7 +311,8 @@ app.get('/api/advisor', authenticateToken, (req, res) => {
             res.json({ advice: advice.trim() });
         } catch (error) {
             console.error('AI Error:', error);
-            res.status(500).json({ error: 'لم أتمكن من توليد النصيحة حالياً' });
+            // 👇 التعديل هنا: جعلنا السيرفر يرسل الخطأ التقني الفعلي للتطبيق
+            res.status(500).json({ error: `خطأ من جوجل: ${error.message}` }); 
         }
     });
 });
