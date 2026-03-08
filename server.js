@@ -259,6 +259,64 @@ app.post('/api/raw-sms', authenticateToken, (req, res) => {
     });
 });
 
+
+// ==========================================
+// 🤖 المستشار المالي الذكي (AI Advisor)
+// ==========================================
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+
+app.get('/api/advisor', authenticateToken, (req, res) => {
+    const userId = req.user.id;
+    
+    // نجلب عمليات الشهر الحالي فقط للتحليل
+    const query = 'SELECT * FROM Transactions WHERE UserId = ? AND MONTH(TransactionDate) = MONTH(CURRENT_DATE()) AND YEAR(TransactionDate) = YEAR(CURRENT_DATE())';
+
+    db.query(query, [userId], async (err, results) => {
+        if (err) return res.status(500).json({ error: 'Database error' });
+
+        if (results.length === 0) {
+            return res.json({ advice: 'أهلاً بك! قم بإضافة بعض العمليات المالية هذا الشهر لأتمكن من تحليل بياناتك وتقديم نصائح مخصصة لك. 📈' });
+        }
+
+        let income = 0;
+        let expense = 0;
+        let categories = {};
+
+        // تحليل وتجميع البيانات
+        results.forEach(t => {
+            const amt = Number(t.Amount);
+            if (t.Type === 'income') income += amt;
+            else if (t.Type === 'expense') {
+                expense += amt;
+                categories[t.Category] = (categories[t.Category] || 0) + amt;
+            }
+        });
+
+        // 🧠 إعداد الـ Prompt الاحترافي للذكاء الاصطناعي
+        const prompt = `أنت مستشار مالي خبير. بناءً على بيانات المستخدم لهذا الشهر:
+        - إجمالي الدخل: ${income} ريال.
+        - إجمالي المصروفات: ${expense} ريال.
+        - تفاصيل المصروفات حسب التصنيف: ${JSON.stringify(categories)}.
+        
+        اكتب نصيحة مالية واحدة ذكية ومباشرة باللغة العربية (سطرين كحد أقصى). 
+        كن مشجعاً، وإذا كان الصرف أعلى من الدخل حذره بلطف. لا تستخدم أي مقدمات مثل "بناءً على البيانات".`;
+
+        try {
+            const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            
+            const result = await model.generateContent(prompt);
+            const advice = result.response.text();
+            
+            res.json({ advice: advice.trim() });
+        } catch (error) {
+            console.error('AI Error:', error);
+            res.status(500).json({ error: 'لم أتمكن من توليد النصيحة حالياً' });
+        }
+    });
+});
+
+
 // Dynamic Port
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
