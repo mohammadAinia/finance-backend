@@ -263,7 +263,8 @@ app.post('/api/raw-sms', authenticateToken, (req, res) => {
 // ==========================================
 // 🤖 المستشار المالي الذكي (AI Advisor)
 // ==========================================
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+// 1. استيراد المكتبة الجديدة
+const { GoogleGenAI } = require('@google/genai');
 
 app.get('/api/advisor', authenticateToken, (req, res) => {
     const userId = req.user.id;
@@ -292,7 +293,7 @@ app.get('/api/advisor', authenticateToken, (req, res) => {
             }
         });
 
-        // 🧠 إعداد الـ Prompt الاحترافي للذكاء الاصطناعي
+        // 🧠 إعداد الـ Prompt
         const prompt = `أنت مستشار مالي خبير. بناءً على بيانات المستخدم لهذا الشهر:
         - إجمالي الدخل: ${income} ريال.
         - إجمالي المصروفات: ${expense} ريال.
@@ -301,18 +302,23 @@ app.get('/api/advisor', authenticateToken, (req, res) => {
         اكتب نصيحة مالية واحدة ذكية ومباشرة باللغة العربية (سطرين كحد أقصى). 
         كن مشجعاً، وإذا كان الصرف أعلى من الدخل حذره بلطف. لا تستخدم أي مقدمات مثل "بناءً على البيانات".`;
 
-try {
-            const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-            const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        try {
+            // 2. التهيئة بالطريقة الجديدة
+            const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
             
-            const result = await model.generateContent(prompt);
-            const advice = result.response.text();
+            // 3. استدعاء الموديل الجديد 3-flash-preview كما هو في توثيق جوجل
+            const response = await ai.models.generateContent({
+                model: "gemini-3-flash-preview",
+                contents: prompt,
+            });
             
+            // 4. استخراج النص وإرساله
+            const advice = response.text;
             res.json({ advice: advice.trim() });
+
         } catch (error) {
             console.error('AI Error:', error);
-            // 👇 التعديل هنا: جعلنا السيرفر يرسل الخطأ التقني الفعلي للتطبيق
-            res.status(500).json({ error: `خطأ من جوجل: ${error.message}` }); 
+            res.status(500).json({ error: `خطأ من جوجل: ${error.message}` });
         }
     });
 });
