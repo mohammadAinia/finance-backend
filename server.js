@@ -3,6 +3,7 @@ const mysql = require('mysql2');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto'); // 👈 استيراد مكتبة التشفير الخاصة بـ Node.js
 require('dotenv').config();
 
 const app = express();
@@ -11,6 +12,38 @@ app.use(cors());
 app.use(express.json());
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_financial_key_2024';
+
+// ==========================================
+// 🔐 محرك تشفير البيانات (AES-256-CBC)
+// ==========================================
+// يجب أن يكون المفتاح 32 حرفاً بالضبط (يمكنك تغييره في ملف .env لاحقاً)
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '12345678901234567890123456789012'; 
+const IV_LENGTH = 16; 
+
+function encrypt(text) {
+    if (!text) return text;
+    let iv = crypto.randomBytes(IV_LENGTH);
+    let cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
+    let encrypted = cipher.update(text.toString());
+    encrypted = Buffer.concat([encrypted, cipher.final()]);
+    return iv.toString('hex') + ':' + encrypted.toString('hex');
+}
+
+function decrypt(text) {
+    if (!text) return text;
+    try {
+        let textParts = text.split(':');
+        let iv = Buffer.from(textParts.shift(), 'hex');
+        let encryptedText = Buffer.from(textParts.join(':'), 'hex');
+        let decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
+        let decrypted = decipher.update(encryptedText);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+        return decrypted.toString();
+    } catch (error) {
+        // إذا فشل فك التشفير (مثلاً البيانات القديمة غير مشفرة)، نعيدها كما هي لتجنب انهيار التطبيق
+        return text; 
+    }
+}
 
 // Database Connection Configuration
 const db = mysql.createConnection({
@@ -22,7 +55,6 @@ const db = mysql.createConnection({
     ssl: { rejectUnauthorized: false }
 });
 
-// Connect to Database and Create Tables
 db.connect((err) => {
     if (err) {
         console.error('❌ Database connection failed:', err.message);
@@ -30,7 +62,6 @@ db.connect((err) => {
     }
     console.log('✅ Successfully connected to MySQL database!');
 
-    // 1. إنشاء جدول المستخدمين
     const createUsersTable = `
         CREATE TABLE IF NOT EXISTS Users (
             Id INT AUTO_INCREMENT PRIMARY KEY,
@@ -40,7 +71,7 @@ db.connect((err) => {
         )
     `;
 
-    // 2. إنشاء جدول العمليات (النسخة الاحترافية والمطورة)
+    // 💡 تم تحويل Description و Notes إلى TEXT لتستوعب النصوص المشفرة الطويلة
     const createTransactionsTable = `
         CREATE TABLE IF NOT EXISTS Transactions (
             Id INT AUTO_INCREMENT PRIMARY KEY,
@@ -49,7 +80,7 @@ db.connect((err) => {
             Type ENUM('income', 'expense') NOT NULL,
             Category VARCHAR(100) NOT NULL,
             SubCategory VARCHAR(100) DEFAULT 'عام',
-            Description VARCHAR(255) NOT NULL,
+            Description TEXT NOT NULL, 
             Notes TEXT DEFAULT NULL,
             TransactionDate DATETIME NOT NULL,
             PaymentMethod VARCHAR(50) DEFAULT 'Cash',
@@ -60,7 +91,6 @@ db.connect((err) => {
         )
     `;
 
-    // 3. إنشاء جدول الميزانيات
     const createBudgetsTable = `
         CREATE TABLE IF NOT EXISTS Budgets (
             Id INT AUTO_INCREMENT PRIMARY KEY,
@@ -72,7 +102,6 @@ db.connect((err) => {
         )
     `;
 
-    // تنفيذ إنشاء الجداول بالترتيب الصحيح
     db.query(createUsersTable, (err) => {
         if (err) console.error('❌ Error creating Users table:', err.message);
         else {
@@ -91,9 +120,7 @@ db.connect((err) => {
     });
 });
 
-// ==========================================
-// 🛡️ Middleware: للتحقق من هوية المستخدم
-// ==========================================
+// Middleware
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -107,9 +134,7 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
-// ==========================================
-// 🔐 نظام الحسابات
-// ==========================================
+// Auth Routes
 app.post('/api/auth/register', async (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: 'مطلوب إدخال اسم المستخدم وكلمة المرور' });
@@ -156,23 +181,32 @@ app.get('/api/auth/mobile-token', authenticateToken, (req, res) => {
     res.json({ mobileToken });
 });
 
-// ==========================================
-// 💰 مسارات العمليات المالية (النسخة المطورة)
-// ==========================================
+// Transactions Routes
 app.get('/api/transactions', authenticateToken, (req, res) => {
     const userId = req.user.id;
     const query = 'SELECT * FROM Transactions WHERE UserId = ? ORDER BY TransactionDate DESC, Id DESC';
 
     db.query(query, [userId], (err, results) => {
         if (err) return res.status(500).json({ error: 'Failed to fetch transactions' });
-        res.json(results);
+        
+        // 🔓 فك التشفير قبل إرسالها لتطبيق الجوال
+        const decryptedResults = results.map(row => {
+            row.Description = decrypt(row.Description);
+            row.Notes = row.Notes ? decrypt(row.Notes) : null;
+            return row;
+        });
+
+        res.json(decryptedResults);
     });
 });
 
-// الإضافة مع الحقول الجديدة
 app.post('/api/transactions', authenticateToken, (req, res) => {
     const userId = req.user.id;
     const { Amount, Type, Category, SubCategory, Description, Notes, TransactionDate, PaymentMethod, IsRecurring, Source } = req.body;
+
+    // 🔒 تشفير البيانات الحساسة قبل الحفظ
+    const encryptedDesc = encrypt(Description);
+    const encryptedNotes = Notes ? encrypt(Notes) : null;
 
     const query = `
         INSERT INTO Transactions 
@@ -182,8 +216,8 @@ app.post('/api/transactions', authenticateToken, (req, res) => {
     const values = [
         userId, Amount, Type, Category, 
         SubCategory || 'عام', 
-        Description, 
-        Notes || null, 
+        encryptedDesc, // 👈 الوصف المشفر
+        encryptedNotes, // 👈 الملاحظات المشفرة
         TransactionDate, 
         PaymentMethod || 'Cash', 
         IsRecurring ? 1 : 0, 
@@ -196,11 +230,14 @@ app.post('/api/transactions', authenticateToken, (req, res) => {
     });
 });
 
-// التحديث مع الحقول الجديدة
 app.put('/api/transactions/:id', authenticateToken, (req, res) => {
     const transactionId = req.params.id;
     const userId = req.user.id;
     const { Amount, Type, Category, SubCategory, Description, Notes, TransactionDate, PaymentMethod, IsRecurring } = req.body;
+
+    // 🔒 تشفير البيانات الحساسة قبل التحديث
+    const encryptedDesc = encrypt(Description);
+    const encryptedNotes = Notes ? encrypt(Notes) : null;
 
     const query = `
         UPDATE Transactions 
@@ -208,7 +245,7 @@ app.put('/api/transactions/:id', authenticateToken, (req, res) => {
         WHERE Id=? AND UserId=?
     `;
     const values = [
-        Amount, Type, Category, SubCategory || 'عام', Description, Notes || null, TransactionDate, PaymentMethod || 'Cash', IsRecurring ? 1 : 0, transactionId, userId
+        Amount, Type, Category, SubCategory || 'عام', encryptedDesc, encryptedNotes, TransactionDate, PaymentMethod || 'Cash', IsRecurring ? 1 : 0, transactionId, userId
     ];
 
     db.query(query, values, (err, result) => {
@@ -228,40 +265,25 @@ app.delete('/api/transactions/:id', authenticateToken, (req, res) => {
     });
 });
 
-// ==========================================
-// 🚀 استلام الرسائل الخام من الآيفون (النسخة المزودة بنظام التتبع الشامل)
-// ==========================================
+// SMS Route
 app.post('/api/raw-sms', authenticateToken, async (req, res) => {
-    console.log("\n==============================================");
-    console.log("📥 [1] استلام رسالة جديدة من الآيفون...");
-    
     const { message: rawText } = req.body;
     const userId = req.user.id;
-    console.log("✉️ نص الرسالة:", rawText.replace(/\n/g, ' ')); // طباعة الرسالة في سطر واحد
 
-    // 1. تجاهل رسائل التفعيل
     const ignoreKeywords = ["رمز مؤقت", "رمز التفعيل", "تم تفعيل", "إضافة مستفيد", "كود", "OTP", "رمز"];
     if (!rawText || rawText.trim().length < 10 || ignoreKeywords.some(key => rawText.includes(key))) {
-        console.log("🚫 [2] تم تجاهل الرسالة (تفعيل أو قصيرة جداً).");
         return res.json({ status: "ignored" });
     }
 
-    // 2. استخراج المبلغ
     let amount = 0;
     const amountMatch = rawText.match(/(?:مبلغ|بـ|SAR)\s*:?\s*([\d,.]+)/i) || rawText.match(/([\d,.]+)\s*(?:ريال|SAR)/i);
     if (amountMatch) {
         amount = parseFloat(amountMatch[1].replace(/,/g, ''));
-        console.log(`💰 [3] تم استخراج المبلغ بنجاح: ${amount}`);
-    } else {
-        console.log("⚠️ [3] لم يتمكن النظام من استخراج المبلغ!");
     }
 
-    // 3. تحديد نوع العملية
     const isIncome = rawText.includes("واردة") || rawText.includes("إيداع") || rawText.includes("استرجاع");
     const type = isIncome ? "income" : "expense";
-    console.log(`🔄 [4] نوع العملية: ${type}`);
 
-    // 4. الاستخراج المبدئي للاسم
     let description = "عملية بنكية";
     if (rawText.includes("من ")) {
         const fromMatch = rawText.match(/من\s+([A-Za-z\u0600-\u06FF0-9\s*_-]+)(?:\n|\r|في|حساب|مبلغ|؜)/i);
@@ -271,9 +293,7 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
         if (toMatch && toMatch[1].trim().length > 2) description = toMatch[1].trim();
     }
     description = description.replace(/حساب.*/g, '').trim();
-    console.log(`📝 [5] الوصف المبدئي للجهة: ${description}`);
 
-    // 5. استخراج طريقة الدفع
     let paymentMethod = 'Bank Transfer';
     const textLower = rawText.toLowerCase();
     if (textLower.includes("applepay") || textLower.includes("ابل باي")) {
@@ -281,9 +301,7 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
     } else if (textLower.includes("بطاقة") || textLower.includes("مدى") || textLower.includes("نقاط بيع") || textLower.includes("شراء")) {
         paymentMethod = 'Card';
     }
-    console.log(`💳 [6] طريقة الدفع: ${paymentMethod}`);
 
-    // 6. التصنيف المبدئي
     let category = isIncome ? "حوالات واردة" : "مصروفات عامة";
     let subCategory = "عام";
     let isRecurring = false;
@@ -301,12 +319,9 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
         category = "المنزل والمقاضي"; subCategory = "سوبر ماركت"; needsAI = false;
     }
 
-    console.log(`🗂️ [7] التصنيف الأولي: ${category} -> ${subCategory} | هل يحتاج AI؟ ${needsAI ? 'نعم' : 'لا'}`);
-
-    // 7. 🤖 الاستعانة بالذكاء الاصطناعي
     if (needsAI && !isIncome) {
         try {
-            console.log("🤖 [8] جاري إرسال العملية لـ Gemini للتحليل...");
+            const { GoogleGenAI } = require('@google/genai');
             const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
             
             const prompt = `أنت خبير مالي في السعودية. هذه رسالة بنكية: "${rawText}". 
@@ -320,43 +335,33 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
             });
 
             let aiText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
-            console.log("🤖 [8] رد Gemini الخام:", aiText);
-
             const aiData = JSON.parse(aiText);
+            
             if (aiData.CleanName) description = aiData.CleanName;
             if (aiData.Category) category = aiData.Category;
             if (aiData.SubCategory) subCategory = aiData.SubCategory;
 
-            console.log(`✅ [8] نجح تحليل AI: تم تعديل الوصف إلى (${description})`);
-
         } catch (error) {
-            // 🔴 إذا تعطل جوجل، السيرفر لن يموت، سيكمل حفظ العملية بالتصنيف الافتراضي
-            console.error("⚠️ [8] فشل الاتصال بالـ AI، سيتم الحفظ بالتصنيف الافتراضي. السبب:", error.message);
+            console.error("AI Error:", error.message);
         }
     }
 
-    // 8. الحفظ في قاعدة البيانات
-    console.log("💾 [9] جاري الحفظ في قاعدة البيانات...");
+    // 🔒 تشفير الوصف النهائي قبل حفظه
+    const encryptedDesc = encrypt(description);
+
     const query = `
         INSERT INTO Transactions 
         (UserId, Amount, Type, Category, SubCategory, Description, TransactionDate, PaymentMethod, IsRecurring, Source) 
         VALUES (?, ?, ?, ?, ?, ?, NOW(), ?, ?, 'SMS')
     `;
     
-    db.query(query, [userId, amount, type, category, subCategory, description, paymentMethod, isRecurring ? 1 : 0], (err, result) => {
-        if (err) {
-            console.error("❌ [10] خطأ كارثي أثناء الحفظ في قاعدة البيانات:", err.message);
-            return res.status(500).json({ error: 'Database save failed', details: err.message });
-        }
-        console.log(`🎉 [10] تمت الإضافة بنجاح! رقم العملية: ${result.insertId}`);
-        console.log("==============================================\n");
+    db.query(query, [userId, amount, type, category, subCategory, encryptedDesc, paymentMethod, isRecurring ? 1 : 0], (err, result) => {
+        if (err) return res.status(500).json({ error: 'Database save failed', details: err.message });
         res.json({ success: true, id: result.insertId });
     });
 });
 
-// ==========================================
-// 📊 مسارات الميزانيات (Budgets)
-// ==========================================
+// Budgets Routes
 app.get('/api/budgets', authenticateToken, (req, res) => {
     const userId = req.user.id;
     const query = 'SELECT * FROM Budgets WHERE UserId = ?';
@@ -370,9 +375,7 @@ app.post('/api/budgets', authenticateToken, (req, res) => {
     const userId = req.user.id;
     const { Category, AmountLimit } = req.body;
 
-    if (!Category || !AmountLimit) {
-        return res.status(400).json({ error: 'الرجاء تحديد القسم وقيمة الميزانية' });
-    }
+    if (!Category || !AmountLimit) return res.status(400).json({ error: 'الرجاء تحديد القسم وقيمة الميزانية' });
 
     const query = `
         INSERT INTO Budgets (UserId, Category, AmountLimit) 
@@ -395,9 +398,7 @@ app.delete('/api/budgets/:category', authenticateToken, (req, res) => {
     });
 });
 
-// ==========================================
-// 🤖 المستشار المالي الذكي (AI Advisor)
-// ==========================================
+// AI Advisor Route
 const { GoogleGenAI } = require('@google/genai');
 
 app.get('/api/advisor', authenticateToken, (req, res) => {
