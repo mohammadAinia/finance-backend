@@ -17,8 +17,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_financial_key_2024';
 // 🔐 محرك تشفير البيانات (AES-256-CBC)
 // ==========================================
 // يجب أن يكون المفتاح 32 حرفاً بالضبط (يمكنك تغييره في ملف .env لاحقاً)
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '12345678901234567890123456789012'; 
-const IV_LENGTH = 16; 
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '12345678901234567890123456789012';
+const IV_LENGTH = 16;
 
 function encrypt(text) {
     if (!text) return text;
@@ -41,7 +41,7 @@ function decrypt(text) {
         return decrypted.toString();
     } catch (error) {
         // إذا فشل فك التشفير (مثلاً البيانات القديمة غير مشفرة)، نعيدها كما هي لتجنب انهيار التطبيق
-        return text; 
+        return text;
     }
 }
 
@@ -143,7 +143,7 @@ app.post('/api/auth/register', async (req, res) => {
         const salt = await bcrypt.genSalt(10);
         const passwordHash = await bcrypt.hash(password, salt);
         const query = 'INSERT INTO Users (Username, PasswordHash) VALUES (?, ?)';
-        
+
         db.query(query, [username, passwordHash], (err, result) => {
             if (err) {
                 if (err.code === 'ER_DUP_ENTRY') return res.status(400).json({ error: 'اسم المستخدم مسجل مسبقاً' });
@@ -159,7 +159,7 @@ app.post('/api/auth/register', async (req, res) => {
 app.post('/api/auth/login', (req, res) => {
     const { username, password } = req.body;
     const query = 'SELECT * FROM Users WHERE Username = ?';
-    
+
     db.query(query, [username], async (err, results) => {
         if (err) return res.status(500).json({ error: 'Database error' });
         if (results.length === 0) return res.status(404).json({ error: 'لا يوجد حساب مسجل بهذا الاسم' });
@@ -188,7 +188,7 @@ app.get('/api/transactions', authenticateToken, (req, res) => {
 
     db.query(query, [userId], (err, results) => {
         if (err) return res.status(500).json({ error: 'Failed to fetch transactions' });
-        
+
         // 🔓 فك التشفير قبل إرسالها لتطبيق الجوال
         const decryptedResults = results.map(row => {
             row.Description = decrypt(row.Description);
@@ -214,13 +214,13 @@ app.post('/api/transactions', authenticateToken, (req, res) => {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
     const values = [
-        userId, Amount, Type, Category, 
-        SubCategory || 'عام', 
+        userId, Amount, Type, Category,
+        SubCategory || 'عام',
         encryptedDesc, // 👈 الوصف المشفر
         encryptedNotes, // 👈 الملاحظات المشفرة
-        TransactionDate, 
-        PaymentMethod || 'Cash', 
-        IsRecurring ? 1 : 0, 
+        TransactionDate,
+        PaymentMethod || 'Cash',
+        IsRecurring ? 1 : 0,
         Source || 'Manual'
     ];
 
@@ -265,6 +265,28 @@ app.delete('/api/transactions/:id', authenticateToken, (req, res) => {
     });
 });
 
+// دالة استخراج التاريخ
+function extractTransactionDate(text) {
+    const cleanText = text.replace(/[\u061C\u200E\u200F]/g, '').replace(/\n|\r/g, ' ');
+    const match1 = cleanText.match(/(\d{1,2})\/(\d{1,2})\/(\d{2})\s+(\d{2}:\d{2})/);
+    if (match1) {
+        const day = match1[1].padStart(2, '0');
+        const month = match1[2].padStart(2, '0');
+        const year = "20" + match1[3]; 
+        const time = match1[4] + ':00';
+        return `${year}-${month}-${day} ${time}`; 
+    }
+    const match2 = cleanText.match(/(\d{2})-(\d{1,2})-(\d{1,2})\s+(\d{2}:\d{2})/);
+    if (match2) {
+        const year = "20" + match2[1];
+        const month = match2[2].padStart(2, '0');
+        const day = match2[3].padStart(2, '0');
+        const time = match2[4] + ':00';
+        return `${year}-${month}-${day} ${time}`;
+    }
+    return null;
+}
+
 // SMS Route
 app.post('/api/raw-sms', authenticateToken, async (req, res) => {
     const { message: rawText } = req.body;
@@ -277,85 +299,111 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
 
     let amount = 0;
     const amountMatch = rawText.match(/(?:مبلغ|بـ|SAR)\s*:?\s*([\d,.]+)/i) || rawText.match(/([\d,.]+)\s*(?:ريال|SAR)/i);
-    if (amountMatch) {
-        amount = parseFloat(amountMatch[1].replace(/,/g, ''));
-    }
+    if (amountMatch) amount = parseFloat(amountMatch[1].replace(/,/g, ''));
 
+    const textLower = rawText.toLowerCase();
     const isIncome = rawText.includes("واردة") || rawText.includes("إيداع") || rawText.includes("استرجاع");
     const type = isIncome ? "income" : "expense";
 
-    let description = "عملية بنكية";
-    if (rawText.includes("من ")) {
-        const fromMatch = rawText.match(/من\s+([A-Za-z\u0600-\u06FF0-9\s*_-]+)(?:\n|\r|في|حساب|مبلغ|؜)/i);
-        if (fromMatch && fromMatch[1].trim().length > 2) description = fromMatch[1].trim();
-    } else if (rawText.includes("لـ ") || rawText.includes("الى:")) {
-        const toMatch = rawText.match(/(?:لـ|الى:)\s*([A-Za-z\u0600-\u06FF0-9\s*_-]+)(?:\n|\r|في|حساب|؜)/i);
-        if (toMatch && toMatch[1].trim().length > 2) description = toMatch[1].trim();
-    }
-    description = description.replace(/حساب.*/g, '').trim();
-
     let paymentMethod = 'Bank Transfer';
-    const textLower = rawText.toLowerCase();
-    if (textLower.includes("applepay") || textLower.includes("ابل باي")) {
-        paymentMethod = 'Apple Pay';
-    } else if (textLower.includes("بطاقة") || textLower.includes("مدى") || textLower.includes("نقاط بيع") || textLower.includes("شراء")) {
-        paymentMethod = 'Card';
-    }
+    if (textLower.includes("applepay") || textLower.includes("ابل باي")) paymentMethod = 'Apple Pay';
+    else if (textLower.includes("بطاقة") || textLower.includes("مدى") || textLower.includes("شراء")) paymentMethod = 'Card';
 
+    // الإعدادات الافتراضية
+    let description = "عملية بنكية";
     let category = isIncome ? "حوالات واردة" : "مصروفات عامة";
     let subCategory = "عام";
     let isRecurring = false;
     let needsAI = true;
 
-    const descLower = description.toLowerCase() + " " + textLower;
+    // =========================================
+    // 💡 القاموس المحلي (لحمايتك من حظر Google API)
+    // =========================================
+    const merchantsDictionary = [
+        { keys: ["panda", "بنده"], name: "بنده", cat: "المنزل والمقاضي", sub: "سوبر ماركت" },
+        { keys: ["mcdonald", "mcd", "ماك"], name: "ماكدونالدز", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["albaik", "البيك"], name: "البيك", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["stc", "الاتصالات"], name: "STC", cat: "فواتير واشتراكات", sub: "اتصالات وإنترنت", recurring: true },
+        { keys: ["netflix", "نتفلكس"], name: "Netflix", cat: "فواتير واشتراكات", sub: "ترفيه", recurring: true },
+        { keys: ["fuel", "محطة", "sasco", "aldrees", "nelt fuel"], name: "محطة وقود", cat: "السيارة والمواصلات", sub: "بنزين" },
+        { keys: ["pharmacy", "nahdi", "صيدلية", "النهدي"], name: "صيدلية", cat: "الصحة والجمال", sub: "أدوية وعلاج" },
+        { keys: ["أطلس المستقبل", "راتب"], name: "راتب العمل", cat: "الراتب والدخل", sub: "راتب العمل" },
+        { keys: ["openai", "chatgpt"], name: "OpenAI", cat: "فواتير واشتراكات", sub: "اشتراكات رقمية", recurring: true }
+    ];
 
-    if (descLower.includes("أطلس المستقبل") || descLower.includes("راتب")) {
-        category = "الراتب والدخل"; subCategory = "راتب العمل"; needsAI = false;
-    } else if (descLower.includes("openai") || descLower.includes("netflix") || descLower.includes("stc")) {
-        category = "فواتير واشتراكات"; subCategory = "اشتراكات رقمية"; isRecurring = true; needsAI = false;
-    } else if (descLower.includes("fuel") || descLower.includes("محطة")) {
-        category = "السيارة والمواصلات"; subCategory = "بنزين"; needsAI = false;
-    } else if (descLower.includes("بقالة") || descLower.includes("supermarket")) {
-        category = "المنزل والمقاضي"; subCategory = "سوبر ماركت"; needsAI = false;
+    // فلترة سريعة: إذا وجدنا الكلمة محلياً، لن نكلم جوجل أبداً!
+    for (let merchant of merchantsDictionary) {
+        if (merchant.keys.some(key => textLower.includes(key))) {
+            description = merchant.name;
+            category = merchant.cat;
+            subCategory = merchant.sub;
+            isRecurring = merchant.recurring || false;
+            needsAI = false; 
+            break;
+        }
     }
 
+    // استخراج اسم المرسل للحوالات الواردة (بدون AI)
+    if (isIncome && needsAI) {
+        const fromMatch = rawText.match(/من\s+([A-Za-z\u0600-\u06FF0-9\s*_-]+)(?:\n|\r|في|حساب|مبلغ|؜)/i);
+        if (fromMatch && fromMatch[1].trim().length > 2) {
+            description = fromMatch[1].trim();
+            needsAI = false;
+        }
+    }
+
+    // =========================================
+    // 🤖 استخدام الذكاء الاصطناعي فقط للعمليات المجهولة
+    // =========================================
     if (needsAI && !isIncome) {
         try {
             const { GoogleGenAI } = require('@google/genai');
             const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
             
+            const allowedCategories = ["المطاعم والكافيهات", "المنزل والمقاضي", "التسوق", "الصحة والجمال", "السيارة والمواصلات", "فواتير واشتراكات", "مصروفات عامة"];
+            
             const prompt = `أنت خبير مالي في السعودية. هذه رسالة بنكية: "${rawText}". 
-            استخرج اسم المتجر وصنفه. أمثلة: "Abdulsama" هو عبدالصمد القرشي.
-            أريد الرد فقط بصيغة JSON خالية من أي نصوص أخرى، بهذا الشكل:
+            استخرج اسم المتجر وصنفه (اختر التصنيف من هنا فقط: ${JSON.stringify(allowedCategories)}).
+            أمثلة: "Abdulsama" هو عبدالصمد القرشي. "TAJ ALHAL" هو تاج الحلا.
+            أريد الرد فقط بصيغة JSON:
             {"CleanName": "اسم المحل الواضح", "Category": "التصنيف", "SubCategory": "التصنيف الفرعي"}`;
 
             const response = await ai.models.generateContent({
-                model: "gemini-3-flash-preview",
+                model: "gemini-3-flash-preview", // تأكد من استخدام هذا الموديل السريع
                 contents: prompt,
             });
 
             let aiText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
             const aiData = JSON.parse(aiText);
-            
+
             if (aiData.CleanName) description = aiData.CleanName;
             if (aiData.Category) category = aiData.Category;
             if (aiData.SubCategory) subCategory = aiData.SubCategory;
 
         } catch (error) {
             console.error("AI Error:", error.message);
+            // خطة بديلة لو تعطل الذكاء الاصطناعي بسبب الضغط
+            const fallbackMatch = rawText.match(/لـ\s*([A-Za-z\s]+)(?:\n|\r|؜)/i);
+            if (fallbackMatch) description = fallbackMatch[1].trim();
         }
     }
 
-    // 🔒 تشفير الوصف النهائي قبل حفظه
+    // استخراج التاريخ
+    let transactionDate = extractTransactionDate(rawText);
+    if (!transactionDate) {
+        transactionDate = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    }
+
+    // تشفير وحفظ
     const encryptedDesc = encrypt(description);
 
     const query = `
         INSERT INTO Transactions 
         (UserId, Amount, Type, Category, SubCategory, Description, TransactionDate, PaymentMethod, IsRecurring, Source) 
-        VALUES (?, ?, ?, ?, ?, ?, NOW(), ?, ?, 'SMS')
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'SMS')
     `;
-    
-    db.query(query, [userId, amount, type, category, subCategory, encryptedDesc, paymentMethod, isRecurring ? 1 : 0], (err, result) => {
+
+    db.query(query, [userId, amount, type, category, subCategory, encryptedDesc, transactionDate, paymentMethod, isRecurring ? 1 : 0], (err, result) => {
         if (err) return res.status(500).json({ error: 'Database save failed', details: err.message });
         res.json({ success: true, id: result.insertId });
     });
