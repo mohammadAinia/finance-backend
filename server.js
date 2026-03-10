@@ -118,6 +118,22 @@ db.connect((err) => {
             });
         }
     });
+    const createAssetsTable = `
+        CREATE TABLE IF NOT EXISTS Assets (
+            Id INT AUTO_INCREMENT PRIMARY KEY,
+            UserId INT NOT NULL,
+            AssetType VARCHAR(50) DEFAULT 'Gold', -- نوع الأصل (ذهب، فضة، أسهم)
+            WeightInOunces DECIMAL(10, 4) NOT NULL, -- الوزن بالأونصة
+            PurchasePricePerOunce DECIMAL(10, 2) NOT NULL, -- سعر الشراء للأونصة الواحدة
+            PurchaseDate DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (UserId) REFERENCES Users(Id) ON DELETE CASCADE
+        )
+    `;
+
+    db.query(createAssetsTable, (err) => {
+        if (err) console.error('❌ Error creating Assets table:', err.message);
+        else console.log('✅ Assets table is ready!');
+    });
 });
 
 // Middleware
@@ -180,6 +196,23 @@ app.get('/api/auth/mobile-token', authenticateToken, (req, res) => {
     const mobileToken = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '3650d' });
     res.json({ mobileToken });
 });
+
+const createAssetsTable = `
+        CREATE TABLE IF NOT EXISTS Assets (
+            Id INT AUTO_INCREMENT PRIMARY KEY,
+            UserId INT NOT NULL,
+            AssetType VARCHAR(50) DEFAULT 'Gold', -- نوع الأصل (ذهب، فضة، أسهم)
+            WeightInOunces DECIMAL(10, 4) NOT NULL, -- الوزن بالأونصة
+            PurchasePricePerOunce DECIMAL(10, 2) NOT NULL, -- سعر الشراء للأونصة الواحدة
+            PurchaseDate DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (UserId) REFERENCES Users(Id) ON DELETE CASCADE
+        )
+    `;
+
+    db.query(createAssetsTable, (err) => {
+        if (err) console.error('❌ Error creating Assets table:', err.message);
+        else console.log('✅ Assets table is ready!');
+    });
 
 // Transactions Routes
 app.get('/api/transactions', authenticateToken, (req, res) => {
@@ -495,7 +528,7 @@ function findMerchantInDictionary(text) {
             const models = [
                 { name: 'llama-3.3-70b-versatile', temperature: 0.1, weight: 1 },
                 { name: 'llama-3.1-8b-instant', temperature: 0.1, weight: 1 },  // بديل سريع
-                { name: 'gemma2-9b-it', temperature: 0.1, weight: 1 }  // لا يزال نشطاً
+                { name: 'qwen-qwq-32b', temperature: 0.1, weight: 1 }  // لا يزال نشطاً
             ];
 
             // البرومبت الموحد لجميع الموديلات
