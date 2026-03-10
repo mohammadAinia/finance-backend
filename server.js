@@ -230,9 +230,15 @@ app.post('/api/auth/update-push-token', authenticateToken, (req, res) => {
     const userId = req.user.id;
     const { pushToken } = req.body;
 
+    if (!pushToken) return res.status(400).json({ error: 'Push token is required' });
+
     db.query('UPDATE Users SET ExpoPushToken = ? WHERE Id = ?', [pushToken, userId], (err) => {
-        if (err) return res.status(500).json({ error: 'Database error' });
-        res.json({ success: true });
+        if (err) {
+            console.error("❌ Error updating push token:", err);
+            return res.status(500).json({ error: 'Database error' });
+        }
+        console.log(`✅ Push Token updated for user ${userId}`);
+        res.json({ success: true, message: 'Token updated successfully' });
     });
 });
 // Auth Routes
