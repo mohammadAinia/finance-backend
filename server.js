@@ -233,50 +233,71 @@ app.delete('/api/assets/gold/:id', authenticateToken, (req, res) => {
     });
 });
 
-// ✅ Corrected GET Route with Parameters
+// ✅ Corrected Gold Assets Route with LIVE Data
 app.get('/api/assets/gold', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     
-    // حساب السعر الحالي بناءً على السعر العالمي للجرام بالريال
-    const livePricePerOunceUSD = 2740.00; 
-    const usdToSar = 3.75;
-    const gramsPerOunce = 31.1035;
-    const livePricePerGramSAR = (livePricePerOunceUSD * usdToSar) / gramsPerOunce;
-
-    // استخدام ? لضمان الأمان وتجنب خطأ الكولوم المجهول
-    const query = 'SELECT * FROM Assets WHERE UserId = ? AND AssetType = ?';
-    
-    db.query(query, [userId, 'Gold'], (err, results) => {
-        if (err) {
-            console.error("❌ Database fetch error:", err.message);
-            return res.status(500).json({ error: 'Database error', details: err.message });
-        }
-
-        let totalGrams = 0;
-        let totalCost = 0;
-
-        results.forEach(asset => {
-            // نعتبر WeightInOunces هنا هي الجرامات بعد التحويل الجديد
-            const weight = parseFloat(asset.WeightInOunces) || 0; 
-            const pricePerGram = parseFloat(asset.PurchasePricePerOunce) || 0;
-            
-            totalGrams += weight;
-            totalCost += (weight * pricePerGram);
+    try {
+        // 1. جلب السعر المباشر من API خارجي
+        // ملاحظة: يمكنك وضع الـ API Key في ملف .env
+        const GOLD_API_KEY = process.env.GOLD_API_KEY || 'YOUR_FREE_API_KEY_HERE';
+        
+        const goldRes = await fetch('https://www.goldapi.io/api/XAU/USD', {
+            headers: {
+                'x-access-token': GOLD_API_KEY,
+                'Content-Type': 'application/json'
+            }
         });
 
-        const currentValue = totalGrams * livePricePerGramSAR;
-        const profitLoss = currentValue - totalCost;
+        const goldData = await goldRes.json();
+        
+        // التحقق من صحة البيانات القادمة من الـ API
+        // السعر العالمي للأونصة بالدولار
+        const livePricePerOunceUSD = goldData.price || 2700.00; 
+        const usdToSar = 3.75;
+        const gramsPerOunce = 31.1035;
 
-        res.json({
-            totalGrams: Number(totalGrams.toFixed(2)),
-            currentValue: Number(currentValue.toFixed(2)),
-            totalCost: Number(totalCost.toFixed(2)),
-            profitLoss: Number(profitLoss.toFixed(2)),
-            profitLossPercentage: totalCost > 0 ? Number(((profitLoss / totalCost) * 100).toFixed(2)) : 0,
-            livePriceSAR: Number(livePricePerGramSAR.toFixed(2)),
-            items: results // هذه القائمة التي تعرضها في "سجل العمليات" بالأسفل
+        // حسابات دقيقة
+        const livePriceSAR_Ounce = livePricePerOunceUSD * usdToSar; // سعر الأونصة بالريال
+        const livePriceSAR_Gram = livePriceSAR_Ounce / gramsPerOunce; // سعر الجرام بالريال
+
+        console.log(`📊 Live Market: Ounce $${livePricePerOunceUSD} | Gram SAR ${livePriceSAR_Gram.toFixed(2)}`);
+
+        // 2. جلب أصول المستخدم من قاعدة البيانات
+        const query = 'SELECT * FROM Assets WHERE UserId = ? AND AssetType = ?';
+        db.query(query, [userId, 'Gold'], (err, results) => {
+            if (err) return res.status(500).json({ error: 'Database error' });
+
+            let totalGrams = 0;
+            let totalCost = 0;
+
+            results.forEach(asset => {
+                const weight = parseFloat(asset.WeightInOunces) || 0; 
+                const pricePerGram = parseFloat(asset.PurchasePricePerOunce) || 0;
+                
+                totalGrams += weight;
+                totalCost += (weight * pricePerGram);
+            });
+
+            const currentValue = totalGrams * livePriceSAR_Gram;
+            const profitLoss = currentValue - totalCost;
+
+            res.json({
+                totalGrams: Number(totalGrams.toFixed(2)),
+                currentValue: Number(currentValue.toFixed(2)),
+                totalCost: Number(totalCost.toFixed(2)),
+                profitLoss: Number(profitLoss.toFixed(2)),
+                profitLossPercentage: totalCost > 0 ? Number(((profitLoss / totalCost) * 100).toFixed(2)) : 0,
+                livePriceSAR: Number(livePriceSAR_Gram.toFixed(2)), // سعر الجرام بالريال
+                livePriceOunceUSD: Number(livePricePerOunceUSD.toFixed(2)), // سعر الأونصة بالدولار
+                items: results
+            });
         });
-    });
+
+    } catch (error) {
+        console.error("❌ External API Error:", error.message);
+        res.status(500).json({ error: 'Failed to fetch live gold price' });
+    }
 });
 
 // مسار لإضافة ذهب جديد - مع تعقب محسن
