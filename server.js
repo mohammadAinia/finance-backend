@@ -3,7 +3,7 @@ const mysql = require('mysql2');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const crypto = require('crypto'); // 👈 استيراد مكتبة التشفير الخاصة بـ Node.js
+const crypto = require('crypto');
 require('dotenv').config();
 
 const app = express();
@@ -14,9 +14,8 @@ app.use(express.json());
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_financial_key_2024';
 
 // ==========================================
-// 🔐 محرك تشفير البيانات (AES-256-CBC)
+// 🔐 Data Encryption Engine (AES-256-CBC)
 // ==========================================
-// يجب أن يكون المفتاح 32 حرفاً بالضبط (يمكنك تغييره في ملف .env لاحقاً)
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '12345678901234567890123456789012';
 const IV_LENGTH = 16;
 
@@ -40,7 +39,6 @@ function decrypt(text) {
         decrypted = Buffer.concat([decrypted, decipher.final()]);
         return decrypted.toString();
     } catch (error) {
-        // إذا فشل فك التشفير (مثلاً البيانات القديمة غير مشفرة)، نعيدها كما هي لتجنب انهيار التطبيق
         return text;
     }
 }
@@ -62,6 +60,7 @@ db.connect((err) => {
     }
     console.log('✅ Successfully connected to MySQL database!');
 
+    // Sequential Table Creation to avoid Foreign Key errors
     const createUsersTable = `
         CREATE TABLE IF NOT EXISTS Users (
             Id INT AUTO_INCREMENT PRIMARY KEY,
@@ -71,7 +70,6 @@ db.connect((err) => {
         )
     `;
 
-    // 💡 تم تحويل Description و Notes إلى TEXT لتستوعب النصوص المشفرة الطويلة
     const createTransactionsTable = `
         CREATE TABLE IF NOT EXISTS Transactions (
             Id INT AUTO_INCREMENT PRIMARY KEY,
@@ -102,6 +100,19 @@ db.connect((err) => {
         )
     `;
 
+    const createAssetsTable = `
+        CREATE TABLE IF NOT EXISTS Assets (
+            Id INT AUTO_INCREMENT PRIMARY KEY,
+            UserId INT NOT NULL,
+            AssetType VARCHAR(50) DEFAULT 'Gold',
+            WeightInOunces DECIMAL(10, 4) NOT NULL,
+            PurchasePricePerOunce DECIMAL(10, 2) NOT NULL,
+            PurchaseDate DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (UserId) REFERENCES Users(Id) ON DELETE CASCADE
+        )
+    `;
+
+    // Execute queries sequentially
     db.query(createUsersTable, (err) => {
         if (err) console.error('❌ Error creating Users table:', err.message);
         else {
@@ -112,27 +123,17 @@ db.connect((err) => {
                     console.log('✅ Transactions table is ready!');
                     db.query(createBudgetsTable, (err) => {
                         if (err) console.error('❌ Error creating Budgets table:', err.message);
-                        else console.log('✅ Budgets table is ready!');
+                        else {
+                            console.log('✅ Budgets table is ready!');
+                            db.query(createAssetsTable, (err) => {
+                                if (err) console.error('❌ Error creating Assets table:', err.message);
+                                else console.log('✅ Assets table is ready!');
+                            });
+                        }
                     });
                 }
             });
         }
-    });
-    const createAssetsTable = `
-        CREATE TABLE IF NOT EXISTS Assets (
-            Id INT AUTO_INCREMENT PRIMARY KEY,
-            UserId INT NOT NULL,
-            AssetType VARCHAR(50) DEFAULT 'Gold', -- نوع الأصل (ذهب، فضة، أسهم)
-            WeightInOunces DECIMAL(10, 4) NOT NULL, -- الوزن بالأونصة
-            PurchasePricePerOunce DECIMAL(10, 2) NOT NULL, -- سعر الشراء للأونصة الواحدة
-            PurchaseDate DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (UserId) REFERENCES Users(Id) ON DELETE CASCADE
-        )
-    `;
-
-    db.query(createAssetsTable, (err) => {
-        if (err) console.error('❌ Error creating Assets table:', err.message);
-        else console.log('✅ Assets table is ready!');
     });
 });
 
@@ -201,7 +202,12 @@ app.get('/api/auth/mobile-token', authenticateToken, (req, res) => {
 app.get('/api/assets/gold', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     
-    // 1. جلب أصول المستخدم من الذهب
+    // 1. حساب السعر العالمي المباشر (يوضع هنا لكي يتم إرساله دائماً)
+    const liveGoldPricePerOunce = 2700.50; // سعر افتراضي بالدولار
+    const usdToSar = 3.75; // تحويل للدولار إلى ريال
+    const liveGoldPriceSAR = liveGoldPricePerOunce * usdToSar;
+
+    // 2. جلب أصول المستخدم من الذهب
     db.query('SELECT * FROM Assets WHERE UserId = ? AND AssetType = "Gold"', [userId], async (err, results) => {
         if (err) return res.status(500).json({ error: 'Database error' });
         
@@ -213,18 +219,20 @@ app.get('/api/assets/gold', authenticateToken, async (req, res) => {
             totalCost += Number(asset.WeightInOunces) * Number(asset.PurchasePricePerOunce);
         });
 
+        // ✅ تم الإصلاح: إرسال السعر العالمي حتى لو كانت المحفظة فارغة
         if (totalOunces === 0) {
-            return res.json({ totalOunces: 0, currentValue: 0, totalCost: 0, profitLoss: 0 });
+            return res.json({ 
+                totalOunces: 0, 
+                currentValue: 0, 
+                totalCost: 0, 
+                profitLoss: 0, 
+                profitLossPercentage: 0, 
+                livePrice: liveGoldPriceSAR 
+            });
         }
 
         try {
-            // 2. جلب السعر العالمي المباشر (سنضع سعر افتراضي هنا للتجربة، لاحقاً نربطه بـ API حقيقي)
-            // في الواقع ستستخدم fetch لجلب السعر من https://www.goldapi.io/api/XAU/USD
-            const liveGoldPricePerOunce = 2700.50; // سعر افتراضي بالدولار
-            const usdToSar = 3.75; // تحويل للدولار إلى ريال
-            const liveGoldPriceSAR = liveGoldPricePerOunce * usdToSar;
-
-            // 3. الحسابات
+            // 3. الحسابات إذا كان يملك ذهباً
             const currentValue = totalOunces * liveGoldPriceSAR;
             const profitLoss = currentValue - totalCost;
             const profitLossPercentage = ((currentValue - totalCost) / totalCost) * 100;
@@ -251,8 +259,11 @@ app.post('/api/assets/gold', authenticateToken, (req, res) => {
 
     const query = 'INSERT INTO Assets (UserId, AssetType, WeightInOunces, PurchasePricePerOunce) VALUES (?, "Gold", ?, ?)';
     db.query(query, [userId, WeightInOunces, PurchasePricePerOunce], (err, result) => {
-        if (err) return res.status(500).json({ error: 'Failed to add asset' });
-        res.json({ success: true, message: 'تم إضافة الأصل بنجاح' });
+        if (err) {
+            console.error('❌ Database error while adding asset:', err.message); // This will print the exact reason for failure in your server logs
+            return res.status(500).json({ error: 'Failed to add asset', details: err.message });
+        }
+        res.status(201).json({ success: true, message: 'تم إضافة الأصل بنجاح', id: result.insertId });
     });
 });
 
