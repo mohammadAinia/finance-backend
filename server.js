@@ -385,7 +385,7 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
 
             const chatCompletion = await groq.chat.completions.create({
                 messages: [{ role: 'user', content: prompt }],
-                model: 'llama3-70b-8192', // نموذج ذكي جداً من شركة ميتا وممتاز في اللغة العربية
+                model: 'groq/compound', // نموذج ذكي جداً من شركة ميتا وممتاز في اللغة العربية
                 temperature: 0.1, // رقم منخفض جداً لمنع الموديل من التأليف والهلوسة
                 response_format: { type: 'json_object' } // 👈 هذه الميزة تجبر Groq على الرد بـ JSON فقط وبدون أي كلام إضافي
             });
