@@ -272,9 +272,9 @@ function extractTransactionDate(text) {
     if (match1) {
         const day = match1[1].padStart(2, '0');
         const month = match1[2].padStart(2, '0');
-        const year = "20" + match1[3]; 
+        const year = "20" + match1[3];
         const time = match1[4] + ':00';
-        return `${year}-${month}-${day} ${time}`; 
+        return `${year}-${month}-${day} ${time}`;
     }
     const match2 = cleanText.match(/(\d{2})-(\d{1,2})-(\d{1,2})\s+(\d{2}:\d{2})/);
     if (match2) {
@@ -336,7 +336,7 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
         { keys: ["total", "توتال"], name: "توتال", cat: "السيارة والمواصلات", sub: "محطات وقود" },
         { keys: ["enoc", "اينوك"], name: "اينوك", cat: "السيارة والمواصلات", sub: "محطات وقود" },
         { keys: ["adnoc", "ادنوك"], name: "ادنوك", cat: "السيارة والمواصلات", sub: "محطات وقود" },
-        
+
         // ========== السوبرماركت والتموين ==========
         { keys: ["panda", "بنده", "باندا"], name: "بنده", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
         { keys: ["danube", "الدانوب"], name: "الدانوب", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
@@ -349,7 +349,7 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
         { keys: ["al-azizia", "العزيزية"], name: "العزيزية", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
         { keys: ["manhal", "المنهل"], name: "المنهل", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
         { keys: ["raghdan", "رغدان"], name: "رغدان", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
-        
+
         // ========== المطاعم والكافيهات ==========
         { keys: ["mcdonald", "mcd", "ماك", "مكدونالدز"], name: "ماكدونالدز", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
         { keys: ["albaik", "البيك", "البيع"], name: "البيك", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
@@ -369,7 +369,7 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
         { keys: ["abu zaid", "ابو زيد"], name: "ابو زيد", cat: "المطاعم والكافيهات", sub: "مطاعم" },
         { keys: ["alromansiah", "الرومانسية"], name: "الرومانسية", cat: "المطاعم والكافيهات", sub: "مطاعم" },
         { keys: ["shawarma", "شاورما"], name: "شاورما", cat: "المطاعم والكافيهات", sub: "مطاعم" },
-        
+
         // ========== الصحة والجمال ==========
         { keys: ["nahdi", "النهدي"], name: "صيدلية النهدي", cat: "الصحة والجمال", sub: "صيدليات" },
         { keys: ["al-dawaa", "الدواء"], name: "صيدلية الدواء", cat: "الصحة والجمال", sub: "صيدليات" },
@@ -380,12 +380,12 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
         { keys: ["sephora", "سيفورا"], name: "سيفورا", cat: "الصحة والجمال", sub: "مستحضرات تجميل" },
         { keys: ["faces", "فيس"], name: "فيس", cat: "الصحة والجمال", sub: "مستحضرات تجميل" },
         { keys: ["centrepoint", "سنتربوينت"], name: "سنتربوينت", cat: "التسوق", sub: "ملابس" },
-        
+
         // ========== الإلكترونيات ==========
         { keys: ["jarir", "جرير"], name: "جرير", cat: "التسوق", sub: "إلكترونيات" },
         { keys: ["extra", "اكسترا", "إكسترا"], name: "إكسترا", cat: "التسوق", sub: "إلكترونيات" },
         { keys: ["al-mukmal", "المكمل"], name: "المكمل", cat: "التسوق", sub: "إلكترونيات" },
-        
+
         // ========== الاشتراكات الرقمية ==========
         { keys: ["stc", "الاتصالات"], name: "STC", cat: "فواتير واشتراكات", sub: "اتصالات", recurring: true },
         { keys: ["mobily", "موبايلي"], name: "موبايلي", cat: "فواتير واشتراكات", sub: "اتصالات", recurring: true },
@@ -401,7 +401,7 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
         { keys: ["google", "قوقل"], name: "Google", cat: "فواتير واشتراكات", sub: "اشتراكات رقمية", recurring: true },
         { keys: ["amazon", "امازون"], name: "Amazon", cat: "التسوق", sub: "تسوق عبر الإنترنت" },
         { keys: ["noon", "نون"], name: "نون", cat: "التسوق", sub: "تسوق عبر الإنترنت" },
-        
+
         // ========== الملابس والأزياء ==========
         { keys: ["sacoor", "ساكور"], name: "ساكور", cat: "التسوق", sub: "ملابس" },
         { keys: ["splash", "سبلاش"], name: "سبلاش", cat: "التسوق", sub: "ملابس" },
@@ -409,7 +409,7 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
         { keys: ["red tag", "ريد تاغ"], name: "ريد تاغ", cat: "التسوق", sub: "ملابس" },
         { keys: ["zara", "زارا"], name: "زارا", cat: "التسوق", sub: "ملابس" },
         { keys: ["hm", "إتش آند إم"], name: "H&M", cat: "التسوق", sub: "ملابس" },
-        
+
         // ========== البنوك ==========
         { keys: ["الاهلي", "البنك الاهلي"], name: "البنك الأهلي", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
         { keys: ["الراجحي", "مصرف الراجحي"], name: "مصرف الراجحي", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
@@ -418,28 +418,39 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
         { keys: ["ساب"], name: "بنك ساب", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
         { keys: ["الرياض"], name: "بنك الرياض", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
         { keys: ["الجزيرة"], name: "بنك الجزيرة", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
-        
+
         // ========== التأمين ==========
         { keys: ["تأمين", "التعاونية", "الراجحي تكافل", "دراية", "ملاذ"], name: "شركة تأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
-        
+
         // ========== الخدمات الحكومية ==========
         { keys: ["ساهر", "المرور"], name: "ساهر", cat: "السيارة والمواصلات", sub: "مخالفات", recurring: false },
         { keys: ["الاحوال", "أبشر"], name: "أبشر", cat: "فواتير واشتراكات", sub: "خدمات حكومية" },
         { keys: ["الكهرباء", "السعودية للكهرباء"], name: "السعودية للكهرباء", cat: "فواتير واشتراكات", sub: "كهرباء", recurring: true },
         { keys: ["المياه", "المياة"], name: "المياه الوطنية", cat: "فواتير واشتراكات", sub: "مياه", recurring: true },
+
+        // ========== التأمين والخدمات المالية ==========
+        { keys: ["tameeni", "تأميني"], name: "تأميني", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["tawuniya", "التعاونية"], name: "التعاونية", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["medgulf", "ميدغلف"], name: "ميدغلف", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["al rajhi takaful", "الراجحي تكافل"], name: "الراجحي تكافل", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["bupa", "بوبا"], name: "بوبا", cat: "الصحة والجمال", sub: "تأمين طبي", recurring: true },
+        { keys: ["enaya", "عناية"], name: "عناية", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["alalamiya", "العالمية"], name: "العالمية للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["saico", "سايكو"], name: "سايكو", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["alhlal", "الهلال"], name: "الهلال للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["alazm", "العزم"], name: "العزم", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["wafa", "وفا"], name: "وفا للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["aljazira", "الجزيرة"], name: "تكافل الجزيرة", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
     ];
 
-    // دالة متقدمة للبحث في القاموس
-    function findMerchantInDictionary(text) {
-        const cleanText = text.toLowerCase().replace(/[^\w\s\u0600-\u06FF]/g, ' ');
-        
+function findMerchantInDictionary(text) {
+        const cleanText = text.toLowerCase();
+
         for (let merchant of merchantsDictionary) {
             for (let key of merchant.keys) {
                 const keyLower = key.toLowerCase();
-                // بحث ذكي مع مراعاة المسافات والكلمات الجزئية
-                if (cleanText.includes(keyLower) || 
-                    cleanText.split(' ').some(word => word === keyLower) ||
-                    (keyLower.length > 3 && cleanText.includes(keyLower.substring(0, keyLower.length-2)))) {
+                // بحث دقيق: الكلمة يجب أن تكون موجودة كما هي بدون قص عشوائي
+                if (cleanText.includes(keyLower)) {
                     return merchant;
                 }
             }
@@ -454,7 +465,7 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
         category = localMerchant.cat;
         subCategory = localMerchant.sub;
         isRecurring = localMerchant.recurring || false;
-        needsAI = false; 
+        needsAI = false;
         console.log(`📖 [Local Dictionary]: ✅ Merchant found (${description}) - No AI needed.`);
     }
 
@@ -473,20 +484,20 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
     // =========================================
     if (needsAI && !isIncome) {
         console.log('🤖 [AI Voting System]: لم يتم العثور على المتجر في القاموس المحلي، جاري تفعيل نظام التصويت...');
-        
+
         try {
             const Groq = require('groq-sdk');
             const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-            
+
             const allowedCategories = ["المطاعم والكافيهات", "المنزل والمقاضي", "التسوق", "الصحة والجمال", "السيارة والمواصلات", "فواتير واشتراكات", "مصروفات عامة"];
-            
+
             // تعريف الموديلات المستخدمة في التصويت
             const models = [
                 { name: 'llama-3.3-70b-versatile', temperature: 0.1, weight: 1 },
-                { name: 'mixtral-8x7b-32768', temperature: 0.1, weight: 1 },
-                { name: 'gemma2-9b-it', temperature: 0.1, weight: 1 }
+                { name: 'llama-3.1-8b-instant', temperature: 0.1, weight: 1 },  // بديل سريع
+                { name: 'gemma2-9b-it', temperature: 0.1, weight: 1 }  // لا يزال نشطاً
             ];
-            
+
             // البرومبت الموحد لجميع الموديلات
             const basePrompt = `أنت خبير مالي متخصص في تحليل الرسائل البنكية السعودية.
             
@@ -519,7 +530,7 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
                         temperature: modelConfig.temperature,
                         response_format: { type: 'json_object' }
                     });
-                    
+
                     const text = completion.choices[0].message.content.trim();
                     return JSON.parse(text);
                 } catch (error) {
@@ -531,45 +542,45 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
             // استدعاء جميع الموديلات بالتوازي
             console.log('🔄 [AI Voting]: استدعاء الموديلات...');
             const results = await Promise.all(models.map(model => callModel(model)));
-            
+
             // تصفية النتائج الناجحة
             const validResults = results.filter(r => r !== null && r.CleanName && r.Category);
-            
+
             if (validResults.length > 0) {
                 console.log(`✅ [AI Voting]: تم استلام ${validResults.length} نتائج من أصل ${models.length}`);
-                
+
                 // نظام التصويت المرجح
                 const votes = {
                     names: {},
                     categories: {},
                     subCategories: {}
                 };
-                
+
                 validResults.forEach((result, index) => {
                     const weight = models[index].weight;
-                    
+
                     // تسجيل الأصوات للاسم
                     votes.names[result.CleanName] = (votes.names[result.CleanName] || 0) + weight;
-                    
+
                     // تسجيل الأصوات للتصنيف
                     votes.categories[result.Category] = (votes.categories[result.Category] || 0) + weight;
-                    
+
                     // تسجيل الأصوات للتصنيف الفرعي
                     votes.subCategories[result.SubCategory] = (votes.subCategories[result.SubCategory] || 0) + weight;
                 });
-                
+
                 // اختيار الفائزين
                 const winningName = Object.keys(votes.names).reduce((a, b) => votes.names[a] > votes.names[b] ? a : b);
                 const winningCategory = Object.keys(votes.categories).reduce((a, b) => votes.categories[a] > votes.categories[b] ? a : b);
                 const winningSubCategory = Object.keys(votes.subCategories).reduce((a, b) => votes.subCategories[a] > votes.subCategories[b] ? a : b);
-                
+
                 // التحقق من الاتساق - إذا كان الفائز بالتصنيف "مطاعم" ولكن الاسم يحتوي على "oil" أو "fuel"
                 const nameLower = winningName.toLowerCase();
-                if (winningCategory === "المطاعم والكافيهات" && 
+                if (winningCategory === "المطاعم والكافيهات" &&
                     (nameLower.includes('oil') || nameLower.includes('fuel') || nameLower.includes('petrol'))) {
                     console.log('⚠️ [AI Voting]: تنبيه - تم اكتشاف عدم اتساق! تصنيف مطاعم لاسم يحتوي على كلمات وقود.');
                     console.log('🔄 [AI Voting]: تجاوز التصويت واستخدام التصنيف الافتراضي "السيارة والمواصلات"');
-                    
+
                     description = winningName;
                     category = "السيارة والمواصلات";
                     subCategory = "محطات وقود";
@@ -578,12 +589,12 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
                     category = winningCategory;
                     subCategory = winningSubCategory;
                 }
-                
+
                 console.log('📊 [AI Voting - Results]:', {
                     votes: votes,
                     winner: { name: winningName, category: winningCategory, subCategory: winningSubCategory }
                 });
-                
+
                 // إضافة المتجر الجديد للقاموس المحلي مؤقتاً (في الذاكرة)
                 // يمكن تخزينه في قاعدة بيانات لاحقاً
                 if (!localMerchant) {
@@ -597,28 +608,28 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
                     });
                     console.log(`💾 [AI Voting]: تم إضافة "${description}" إلى القاموس المحلي مؤقتاً.`);
                 }
-                
+
             } else {
                 throw new Error('لم تنجح أي من الموديلات في التصنيف');
             }
-            
+
         } catch (error) {
             console.error("❌ [AI Voting - Error]:", error.message);
-            
+
             // خطة بديلة متعددة المستويات
             let fallbackSuccess = false;
-            
+
             // المستوى 1: محاولة استخراج الاسم من النص
-            const nameMatch = rawText.match(/لـ\s*([A-Za-z\u0600-\u06FF\s]+)(?:\n|\r|؜|بـ|عبر)/i) || 
-                             rawText.match(/في\s*([A-Za-z\u0600-\u06FF\s]+)(?:\n|\r|؜)/i) ||
-                             rawText.match(/([A-Za-z\u0600-\u06FF]{3,})\s*\d{4,}/i);
-            
+            const nameMatch = rawText.match(/لـ\s*([A-Za-z\u0600-\u06FF\s]+)(?:\n|\r|؜|بـ|عبر)/i) ||
+                rawText.match(/في\s*([A-Za-z\u0600-\u06FF\s]+)(?:\n|\r|؜)/i) ||
+                rawText.match(/([A-Za-z\u0600-\u06FF]{3,})\s*\d{4,}/i);
+
             if (nameMatch && nameMatch[1].trim().length > 2) {
                 description = nameMatch[1].trim();
                 fallbackSuccess = true;
                 console.log(`⚠️ [Fallback Level 1]: تم استخراج الاسم من النص (${description}).`);
             }
-            
+
             // المستوى 2: البحث عن كلمات مفتاحية في النص
             if (!fallbackSuccess) {
                 if (rawText.includes("بنزين") || rawText.includes("محطة")) {
@@ -635,7 +646,7 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
                     console.log(`⚠️ [Fallback Level 2]: تم التصنيف بناءً على كلمات مفتاحية (${description}).`);
                 }
             }
-            
+
             // المستوى 3: استخدام أول كلمة إنجليزية أو عربية طويلة
             if (!fallbackSuccess) {
                 const words = rawText.split(/[\s\n\r]+/);
@@ -648,7 +659,7 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
                     }
                 }
             }
-            
+
             if (!fallbackSuccess) {
                 console.log(`⚠️ [Fallback Level 4]: استخدام الاسم الافتراضي.`);
             }
@@ -772,7 +783,7 @@ app.get('/api/advisor', authenticateToken, (req, res) => {
 
             // ✅ تفعيل محرك Groq للحصول على نصيحة سريعة
             console.log('\n🤖 [Groq Advisor]: جاري طلب النصيحة المالية من Groq...');
-            
+
             const Groq = require('groq-sdk');
             const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -784,7 +795,7 @@ app.get('/api/advisor', authenticateToken, (req, res) => {
 
             const aiAdvice = chatCompletion.choices[0].message.content.trim();
             console.log('✅ [Groq Advisor - نجاح]: تم توليد النصيحة بنجاح.');
-            
+
             res.json({ advice: aiAdvice });
 
         } catch (error) {
