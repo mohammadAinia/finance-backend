@@ -199,6 +199,7 @@ app.get('/api/auth/mobile-token', authenticateToken, (req, res) => {
 });
 
 // مسار الأصول (الذهب)
+// مسار الأصول (الذهب)
 app.get('/api/assets/gold', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     
@@ -209,17 +210,23 @@ app.get('/api/assets/gold', authenticateToken, async (req, res) => {
 
     // 2. جلب أصول المستخدم من الذهب
     db.query('SELECT * FROM Assets WHERE UserId = ? AND AssetType = "Gold"', [userId], async (err, results) => {
-        if (err) return res.status(500).json({ error: 'Database error' });
+        if (err) {
+            console.error("Database fetch error:", err);
+            return res.status(500).json({ error: 'Database error' });
+        }
         
         let totalOunces = 0;
         let totalCost = 0;
         
         results.forEach(asset => {
-            totalOunces += Number(asset.WeightInOunces);
-            totalCost += Number(asset.WeightInOunces) * Number(asset.PurchasePricePerOunce);
+            // Ensure numbers are properly parsed from SQL Decimal types
+            const weight = parseFloat(asset.WeightInOunces);
+            const price = parseFloat(asset.PurchasePricePerOunce);
+            
+            totalOunces += weight;
+            totalCost += (weight * price);
         });
 
-        // ✅ تم الإصلاح: إرسال السعر العالمي حتى لو كانت المحفظة فارغة
         if (totalOunces === 0) {
             return res.json({ 
                 totalOunces: 0, 
@@ -237,17 +244,19 @@ app.get('/api/assets/gold', authenticateToken, async (req, res) => {
             const profitLoss = currentValue - totalCost;
             const profitLossPercentage = ((currentValue - totalCost) / totalCost) * 100;
 
+            // ✅ Fix: Send strict numeric types, formatted to 2 decimal places to avoid floating point issues
             res.json({
-                totalOunces,
-                currentValue,
-                totalCost,
-                profitLoss,
-                profitLossPercentage,
-                livePrice: liveGoldPriceSAR
+                totalOunces: Number(totalOunces.toFixed(4)),
+                currentValue: Number(currentValue.toFixed(2)),
+                totalCost: Number(totalCost.toFixed(2)),
+                profitLoss: Number(profitLoss.toFixed(2)),
+                profitLossPercentage: Number(profitLossPercentage.toFixed(2)),
+                livePrice: Number(liveGoldPriceSAR.toFixed(2))
             });
 
         } catch (error) {
-            res.status(500).json({ error: 'Failed to fetch live gold price' });
+            console.error("Calculation error:", error);
+            res.status(500).json({ error: 'Failed to process gold data' });
         }
     });
 });
