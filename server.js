@@ -198,83 +198,143 @@ app.get('/api/auth/mobile-token', authenticateToken, (req, res) => {
     res.json({ mobileToken });
 });
 
-// مسار الأصول (الذهب)
-// مسار الأصول (الذهب)
+// مسار الأصول (الذهب) - مع تعقب محسن
 app.get('/api/assets/gold', authenticateToken, async (req, res) => {
     const userId = req.user.id;
+    console.log(`📊 Fetching gold assets for user ID: ${userId}`);
     
-    // 1. حساب السعر العالمي المباشر (يوضع هنا لكي يتم إرساله دائماً)
+    // 1. حساب السعر العالمي المباشر
     const liveGoldPricePerOunce = 2700.50; // سعر افتراضي بالدولار
-    const usdToSar = 3.75; // تحويل للدولار إلى ريال
+    const usdToSar = 3.75;
     const liveGoldPriceSAR = liveGoldPricePerOunce * usdToSar;
+
+    console.log(`💰 Live gold price: $${liveGoldPricePerOunce} per ounce, SAR ${liveGoldPriceSAR}`);
 
     // 2. جلب أصول المستخدم من الذهب
     db.query('SELECT * FROM Assets WHERE UserId = ? AND AssetType = "Gold"', [userId], async (err, results) => {
         if (err) {
-            console.error("Database fetch error:", err);
-            return res.status(500).json({ error: 'Database error' });
+            console.error("❌ Database fetch error:", err.message);
+            console.error("❌ SQL Error details:", err);
+            return res.status(500).json({ error: 'Database error', details: err.message });
         }
         
-        let totalOunces = 0;
-        let totalCost = 0;
+        console.log(`📦 Found ${results.length} gold assets for user ${userId}`);
         
-        results.forEach(asset => {
-            // Ensure numbers are properly parsed from SQL Decimal types
-            const weight = parseFloat(asset.WeightInOunces);
-            const price = parseFloat(asset.PurchasePricePerOunce);
-            
-            totalOunces += weight;
-            totalCost += (weight * price);
-        });
-
-        if (totalOunces === 0) {
+        if (results.length === 0) {
+            console.log('⚠️ No gold assets found for this user');
             return res.json({ 
                 totalOunces: 0, 
                 currentValue: 0, 
                 totalCost: 0, 
                 profitLoss: 0, 
                 profitLossPercentage: 0, 
-                livePrice: liveGoldPriceSAR 
+                livePrice: liveGoldPriceSAR,
+                assetsCount: 0,
+                message: 'No gold assets found'
             });
         }
 
+        // Log each asset for debugging
+        results.forEach((asset, index) => {
+            console.log(`📈 Asset ${index + 1}:`, {
+                id: asset.Id,
+                weight: asset.WeightInOunces,
+                price: asset.PurchasePricePerOunce,
+                date: asset.PurchaseDate
+            });
+        });
+        
+        let totalOunces = 0;
+        let totalCost = 0;
+        
+        results.forEach(asset => {
+            // Ensure numbers are properly parsed
+            const weight = parseFloat(asset.WeightInOunces);
+            const price = parseFloat(asset.PurchasePricePerOunce);
+            
+            console.log(`🔢 Processing: weight=${weight}, price=${price}`);
+            
+            totalOunces += weight;
+            totalCost += (weight * price);
+        });
+
+        console.log(`📊 Calculated totals - Ounces: ${totalOunces}, Cost: ${totalCost}`);
+
         try {
-            // 3. الحسابات إذا كان يملك ذهباً
+            // 3. الحسابات
             const currentValue = totalOunces * liveGoldPriceSAR;
             const profitLoss = currentValue - totalCost;
-            const profitLossPercentage = ((currentValue - totalCost) / totalCost) * 100;
+            const profitLossPercentage = totalCost > 0 ? ((currentValue - totalCost) / totalCost) * 100 : 0;
 
-            // ✅ Fix: Send strict numeric types, formatted to 2 decimal places to avoid floating point issues
-            res.json({
+            const response = {
                 totalOunces: Number(totalOunces.toFixed(4)),
                 currentValue: Number(currentValue.toFixed(2)),
                 totalCost: Number(totalCost.toFixed(2)),
                 profitLoss: Number(profitLoss.toFixed(2)),
                 profitLossPercentage: Number(profitLossPercentage.toFixed(2)),
-                livePrice: Number(liveGoldPriceSAR.toFixed(2))
-            });
+                livePrice: Number(liveGoldPriceSAR.toFixed(2)),
+                assetsCount: results.length
+            };
+
+            console.log('✅ Sending response:', JSON.stringify(response, null, 2));
+            res.json(response);
 
         } catch (error) {
-            console.error("Calculation error:", error);
-            res.status(500).json({ error: 'Failed to process gold data' });
+            console.error("❌ Calculation error:", error);
+            console.error("❌ Error stack:", error.stack);
+            res.status(500).json({ error: 'Failed to process gold data', details: error.message });
         }
     });
 });
 
-// مسار لإضافة ذهب جديد
+// مسار لإضافة ذهب جديد - مع تعقب محسن
 app.post('/api/assets/gold', authenticateToken, (req, res) => {
     const userId = req.user.id;
     const { WeightInOunces, PurchasePricePerOunce } = req.body;
 
+    console.log(`📝 Adding gold for user ${userId}:`, { WeightInOunces, PurchasePricePerOunce });
+
+    // Validate input
+    if (!WeightInOunces || !PurchasePricePerOunce) {
+        console.log('❌ Missing required fields');
+        return res.status(400).json({ error: 'Weight and price are required' });
+    }
+
+    const weight = parseFloat(WeightInOunces);
+    const price = parseFloat(PurchasePricePerOunce);
+
+    if (isNaN(weight) || weight <= 0 || isNaN(price) || price <= 0) {
+        console.log('❌ Invalid values:', { weight, price });
+        return res.status(400).json({ error: 'Invalid weight or price values' });
+    }
+
     const query = "INSERT INTO Assets (UserId, AssetType, WeightInOunces, PurchasePricePerOunce) VALUES (?, 'Gold', ?, ?)";
-    db.query(query, [userId, WeightInOunces, PurchasePricePerOunce], (err, result) => {
+    
+    db.query(query, [userId, weight, price], (err, result) => {
         if (err) {
-            console.error('❌ Database error while adding asset:', err.message); // This will print the exact reason for failure in your server logs
-            return res.status(500).json({ error: 'Failed to add asset', details: err.message });
+            console.error('❌ Database error while adding asset:', err.message);
+            console.error('❌ SQL Error details:', err);
+            return res.status(500).json({ 
+                error: 'Failed to add asset', 
+                details: err.message,
+                sqlError: err.code 
+            });
         }
-        res.status(201).json({ success: true, message: 'تم إضافة الأصل بنجاح', id: result.insertId });
+        
+        console.log('✅ Asset added successfully:', {
+            insertId: result.insertId,
+            affectedRows: result.affectedRows
+        });
+        
+        res.status(201).json({ 
+            success: true, 
+            message: 'تم إضافة الأصل بنجاح', 
+            id: result.insertId 
+        });
     });
 });
+
+
 
 // Transactions Routes
 app.get('/api/transactions', authenticateToken, (req, res) => {
