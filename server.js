@@ -211,33 +211,52 @@ app.get('/api/assets/gold/list', authenticateToken, (req, res) => {
     });
 });
 
-// 2. حذف عملية شراء
+// ✅ Corrected DELETE Route
 app.delete('/api/assets/gold/:id', authenticateToken, (req, res) => {
     const userId = req.user.id;
     const assetId = req.params.id;
     
-    db.query('DELETE FROM Assets WHERE Id = ? AND UserId = ?', [assetId, userId], (err, result) => {
-        if (err) return res.status(500).json({ error: 'Database error' });
-        res.json({ success: true, message: 'تم الحذف بنجاح' });
+    // نتحقق من AssetId وأيضاً UserId لضمان أمان البيانات (لا يمكن حذف أصل لمستخدم آخر)
+    const query = 'DELETE FROM Assets WHERE Id = ? AND UserId = ?';
+    
+    db.query(query, [assetId, userId], (err, result) => {
+        if (err) {
+            console.error("❌ Delete error:", err.message);
+            return res.status(500).json({ error: 'Database error' });
+        }
+        
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Asset not found or unauthorized' });
+        }
+
+        res.json({ success: true, message: 'تم حذف العملية بنجاح' });
     });
 });
 
-// 3. تحديث مسار الجلب الرئيسي (Calculations in Grams)
+// ✅ Corrected GET Route with Parameters
 app.get('/api/assets/gold', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     
-    // Updated Live Prices (Example based on current market)
-    const livePricePerOunceUSD = 2740.00; // Global USD price
-    const livePricePerGramSAR = (livePricePerOunceUSD * 3.75) / 31.1035; // Convert to Gram SAR
+    // حساب السعر الحالي بناءً على السعر العالمي للجرام بالريال
+    const livePricePerOunceUSD = 2740.00; 
+    const usdToSar = 3.75;
+    const gramsPerOunce = 31.1035;
+    const livePricePerGramSAR = (livePricePerOunceUSD * usdToSar) / gramsPerOunce;
 
-    db.query('SELECT * FROM Assets WHERE UserId = ? AND AssetType = "Gold"', [userId], (err, results) => {
-        if (err) return res.status(500).json({ error: 'Database error' });
+    // استخدام ? لضمان الأمان وتجنب خطأ الكولوم المجهول
+    const query = 'SELECT * FROM Assets WHERE UserId = ? AND AssetType = ?';
+    
+    db.query(query, [userId, 'Gold'], (err, results) => {
+        if (err) {
+            console.error("❌ Database fetch error:", err.message);
+            return res.status(500).json({ error: 'Database error', details: err.message });
+        }
 
         let totalGrams = 0;
         let totalCost = 0;
 
         results.forEach(asset => {
-            // We assume stored weight is now treated as Grams for the new logic
+            // نعتبر WeightInOunces هنا هي الجرامات بعد التحويل الجديد
             const weight = parseFloat(asset.WeightInOunces) || 0; 
             const pricePerGram = parseFloat(asset.PurchasePricePerOunce) || 0;
             
@@ -254,8 +273,8 @@ app.get('/api/assets/gold', authenticateToken, async (req, res) => {
             totalCost: Number(totalCost.toFixed(2)),
             profitLoss: Number(profitLoss.toFixed(2)),
             profitLossPercentage: totalCost > 0 ? Number(((profitLoss / totalCost) * 100).toFixed(2)) : 0,
-            livePriceSAR: Number(livePricePerGramSAR.toFixed(2)), // Price per Gram in SAR
-            items: results // Detailed list
+            livePriceSAR: Number(livePricePerGramSAR.toFixed(2)),
+            items: results // هذه القائمة التي تعرضها في "سجل العمليات" بالأسفل
         });
     });
 });
