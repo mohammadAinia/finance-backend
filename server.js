@@ -198,30 +198,27 @@ app.get('/api/auth/mobile-token', authenticateToken, (req, res) => {
     res.json({ mobileToken });
 });
 
-// مسار الأصول (الذهب) - مع تعقب محسن
+// ✅ Corrected Gold Assets Route
 app.get('/api/assets/gold', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     console.log(`📊 Fetching gold assets for user ID: ${userId}`);
     
-    // 1. حساب السعر العالمي المباشر
-    const liveGoldPricePerOunce = 2700.50; // سعر افتراضي بالدولار
+    const liveGoldPricePerOunce = 2700.50; 
     const usdToSar = 3.75;
     const liveGoldPriceSAR = liveGoldPricePerOunce * usdToSar;
 
-    console.log(`💰 Live gold price: $${liveGoldPricePerOunce} per ounce, SAR ${liveGoldPriceSAR}`);
-
-    // 2. جلب أصول المستخدم من الذهب
-    db.query('SELECT * FROM Assets WHERE UserId = ? AND AssetType = "Gold"', [userId], async (err, results) => {
+    // FIX: Using parameters (?) for both UserId and AssetType to avoid SQL errors
+    const query = 'SELECT * FROM Assets WHERE UserId = ? AND AssetType = ?';
+    
+    db.query(query, [userId, 'Gold'], (err, results) => {
         if (err) {
             console.error("❌ Database fetch error:", err.message);
-            console.error("❌ SQL Error details:", err);
             return res.status(500).json({ error: 'Database error', details: err.message });
         }
         
         console.log(`📦 Found ${results.length} gold assets for user ${userId}`);
         
         if (results.length === 0) {
-            console.log('⚠️ No gold assets found for this user');
             return res.json({ 
                 totalOunces: 0, 
                 currentValue: 0, 
@@ -229,61 +226,38 @@ app.get('/api/assets/gold', authenticateToken, async (req, res) => {
                 profitLoss: 0, 
                 profitLossPercentage: 0, 
                 livePrice: liveGoldPriceSAR,
-                assetsCount: 0,
-                message: 'No gold assets found'
+                assetsCount: 0
             });
         }
 
-        // Log each asset for debugging
-        results.forEach((asset, index) => {
-            console.log(`📈 Asset ${index + 1}:`, {
-                id: asset.Id,
-                weight: asset.WeightInOunces,
-                price: asset.PurchasePricePerOunce,
-                date: asset.PurchaseDate
-            });
-        });
-        
         let totalOunces = 0;
         let totalCost = 0;
         
         results.forEach(asset => {
-            // Ensure numbers are properly parsed
-            const weight = parseFloat(asset.WeightInOunces);
-            const price = parseFloat(asset.PurchasePricePerOunce);
-            
-            console.log(`🔢 Processing: weight=${weight}, price=${price}`);
+            // Ensure numbers are parsed correctly from MySQL Decimal strings
+            const weight = parseFloat(asset.WeightInOunces) || 0;
+            const price = parseFloat(asset.PurchasePricePerOunce) || 0;
             
             totalOunces += weight;
             totalCost += (weight * price);
         });
 
-        console.log(`📊 Calculated totals - Ounces: ${totalOunces}, Cost: ${totalCost}`);
+        const currentValue = totalOunces * liveGoldPriceSAR;
+        const profitLoss = currentValue - totalCost;
+        const profitLossPercentage = totalCost > 0 ? ((currentValue - totalCost) / totalCost) * 100 : 0;
 
-        try {
-            // 3. الحسابات
-            const currentValue = totalOunces * liveGoldPriceSAR;
-            const profitLoss = currentValue - totalCost;
-            const profitLossPercentage = totalCost > 0 ? ((currentValue - totalCost) / totalCost) * 100 : 0;
+        const response = {
+            totalOunces: Number(totalOunces.toFixed(4)),
+            currentValue: Number(currentValue.toFixed(2)),
+            totalCost: Number(totalCost.toFixed(2)),
+            profitLoss: Number(profitLoss.toFixed(2)),
+            profitLossPercentage: Number(profitLossPercentage.toFixed(2)),
+            livePrice: Number(liveGoldPriceSAR.toFixed(2)),
+            assetsCount: results.length
+        };
 
-            const response = {
-                totalOunces: Number(totalOunces.toFixed(4)),
-                currentValue: Number(currentValue.toFixed(2)),
-                totalCost: Number(totalCost.toFixed(2)),
-                profitLoss: Number(profitLoss.toFixed(2)),
-                profitLossPercentage: Number(profitLossPercentage.toFixed(2)),
-                livePrice: Number(liveGoldPriceSAR.toFixed(2)),
-                assetsCount: results.length
-            };
-
-            console.log('✅ Sending response:', JSON.stringify(response, null, 2));
-            res.json(response);
-
-        } catch (error) {
-            console.error("❌ Calculation error:", error);
-            console.error("❌ Error stack:", error.stack);
-            res.status(500).json({ error: 'Failed to process gold data', details: error.message });
-        }
+        console.log('✅ Data processed and sent back to mobile.');
+        res.json(response);
     });
 });
 
