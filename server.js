@@ -197,22 +197,64 @@ app.get('/api/auth/mobile-token', authenticateToken, (req, res) => {
     res.json({ mobileToken });
 });
 
-const createAssetsTable = `
-        CREATE TABLE IF NOT EXISTS Assets (
-            Id INT AUTO_INCREMENT PRIMARY KEY,
-            UserId INT NOT NULL,
-            AssetType VARCHAR(50) DEFAULT 'Gold', -- نوع الأصل (ذهب، فضة، أسهم)
-            WeightInOunces DECIMAL(10, 4) NOT NULL, -- الوزن بالأونصة
-            PurchasePricePerOunce DECIMAL(10, 2) NOT NULL, -- سعر الشراء للأونصة الواحدة
-            PurchaseDate DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (UserId) REFERENCES Users(Id) ON DELETE CASCADE
-        )
-    `;
+// مسار الأصول (الذهب)
+app.get('/api/assets/gold', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
+    
+    // 1. جلب أصول المستخدم من الذهب
+    db.query('SELECT * FROM Assets WHERE UserId = ? AND AssetType = "Gold"', [userId], async (err, results) => {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        
+        let totalOunces = 0;
+        let totalCost = 0;
+        
+        results.forEach(asset => {
+            totalOunces += Number(asset.WeightInOunces);
+            totalCost += Number(asset.WeightInOunces) * Number(asset.PurchasePricePerOunce);
+        });
 
-    db.query(createAssetsTable, (err) => {
-        if (err) console.error('❌ Error creating Assets table:', err.message);
-        else console.log('✅ Assets table is ready!');
+        if (totalOunces === 0) {
+            return res.json({ totalOunces: 0, currentValue: 0, totalCost: 0, profitLoss: 0 });
+        }
+
+        try {
+            // 2. جلب السعر العالمي المباشر (سنضع سعر افتراضي هنا للتجربة، لاحقاً نربطه بـ API حقيقي)
+            // في الواقع ستستخدم fetch لجلب السعر من https://www.goldapi.io/api/XAU/USD
+            const liveGoldPricePerOunce = 2700.50; // سعر افتراضي بالدولار
+            const usdToSar = 3.75; // تحويل للدولار إلى ريال
+            const liveGoldPriceSAR = liveGoldPricePerOunce * usdToSar;
+
+            // 3. الحسابات
+            const currentValue = totalOunces * liveGoldPriceSAR;
+            const profitLoss = currentValue - totalCost;
+            const profitLossPercentage = ((currentValue - totalCost) / totalCost) * 100;
+
+            res.json({
+                totalOunces,
+                currentValue,
+                totalCost,
+                profitLoss,
+                profitLossPercentage,
+                livePrice: liveGoldPriceSAR
+            });
+
+        } catch (error) {
+            res.status(500).json({ error: 'Failed to fetch live gold price' });
+        }
     });
+});
+
+// مسار لإضافة ذهب جديد
+app.post('/api/assets/gold', authenticateToken, (req, res) => {
+    const userId = req.user.id;
+    const { WeightInOunces, PurchasePricePerOunce } = req.body;
+
+    const query = 'INSERT INTO Assets (UserId, AssetType, WeightInOunces, PurchasePricePerOunce) VALUES (?, "Gold", ?, ?)';
+    db.query(query, [userId, WeightInOunces, PurchasePricePerOunce], (err, result) => {
+        if (err) return res.status(500).json({ error: 'Failed to add asset' });
+        res.json({ success: true, message: 'تم إضافة الأصل بنجاح' });
+    });
+});
 
 // Transactions Routes
 app.get('/api/transactions', authenticateToken, (req, res) => {
