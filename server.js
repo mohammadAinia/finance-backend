@@ -150,7 +150,91 @@ const authenticateToken = (req, res, next) => {
         next();
     });
 };
+const cron = require('node-cron');
+const { Expo } = require('expo-server-sdk');
+let expo = new Expo();
 
+// ✅ وظيفة برمجية تعمل تلقائياً كل ساعتين
+// السلسلة '0 */2 * * *' تعني (عند الدقيقة 0 من كل ساعتين)
+cron.schedule('0 */2 * * *', async () => {
+    console.log('⏰ Running Gold Price Notification Task...');
+
+    try {
+        // 1. جلب السعر المباشر (نفس المنطق الذي وضعناه سابقاً)
+        const GOLD_API_KEY = process.env.GOLD_API_KEY || 'YOUR_API_KEY';
+        const goldRes = await fetch('https://www.goldapi.io/api/XAU/USD', {
+            headers: { 'x-access-token': GOLD_API_KEY }
+        });
+        const goldData = await goldRes.json();
+        const livePriceSAR_Gram = (goldData.price * 3.75) / 31.1035;
+
+        // 2. جلب المستخدمين الذين لديهم ذهب (هنا كمثال لمستخدمك رقم 1)
+        // في التطبيق الفعلي، يمكنك عمل Loop على كل المستخدمين
+        const query = 'SELECT * FROM Assets WHERE AssetType = "Gold"';
+
+        db.query(query, async (err, results) => {
+            if (err) return console.error(err);
+
+            // تجميع البيانات لكل مستخدم (تبسيط للمثال)
+            let totalGrams = 0;
+            let totalCost = 0;
+            results.forEach(asset => {
+                totalGrams += parseFloat(asset.WeightInOunces);
+                totalCost += (parseFloat(asset.WeightInOunces) * parseFloat(asset.PurchasePricePerOunce));
+            });
+
+            const currentValue = totalGrams * livePriceSAR_Gram;
+            const profitLoss = currentValue - totalCost;
+            const status = profitLoss >= 0 ? 'ربح' : 'خسارة';
+
+            // 3. إرسال الإشعار (يحتاج أن يكون لديك Expo Push Token للمستخدم مخزناً في الداتا بيز)
+            // سأفترض أننا سنطبع النتيجة في الكونسول الآن، ولتفعيل الإشعارات للجوال 
+            // يجب ربطها بـ Expo Push Token الخاص بجهازك.
+            // داخل cron.schedule
+            const messages = [];
+            // جلب المستخدمين مع التوكنات الخاصة بهم
+            db.query('SELECT ExpoPushToken FROM Users WHERE Id = ?', [1], (err, users) => {
+                for (let user of users) {
+                    if (!Expo.isExpoPushToken(user.ExpoPushToken)) continue;
+
+                    messages.push({
+                        to: user.ExpoPushToken,
+                        sound: 'default',
+                        title: '💰 تحديث محفظة الذهب',
+                        body: `سعر الجرام: ${livePriceSAR_Gram.toFixed(2)} ر.س | حالتك: ${status} ${Math.abs(profitLoss).toFixed(2)} ر.س`,
+                        data: { withSome: 'data' },
+                    });
+                }
+
+                let chunks = expo.chunkPushNotifications(messages);
+                (async () => {
+                    for (let chunk of chunks) {
+                        try {
+                            await expo.sendPushNotificationsAsync(chunk);
+                        } catch (error) {
+                            console.error(error);
+                        }
+                    }
+                })();
+            });
+
+            // هنا يوضع كود إرسال الإشعار الفعلي للجوال عبر Expo
+        });
+
+    } catch (error) {
+        console.error('Cron Job Error:', error);
+    }
+});
+
+app.post('/api/auth/update-push-token', authenticateToken, (req, res) => {
+    const userId = req.user.id;
+    const { pushToken } = req.body;
+
+    db.query('UPDATE Users SET ExpoPushToken = ? WHERE Id = ?', [pushToken, userId], (err) => {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        res.json({ success: true });
+    });
+});
 // Auth Routes
 app.post('/api/auth/register', async (req, res) => {
     const { username, password } = req.body;
@@ -204,7 +288,7 @@ app.get('/api/auth/mobile-token', authenticateToken, (req, res) => {
 app.get('/api/assets/gold/list', authenticateToken, (req, res) => {
     const userId = req.user.id;
     const query = 'SELECT * FROM Assets WHERE UserId = ? AND AssetType = "Gold" ORDER BY PurchaseDate DESC';
-    
+
     db.query(query, [userId], (err, results) => {
         if (err) return res.status(500).json({ error: 'Database error' });
         res.json(results);
@@ -215,16 +299,16 @@ app.get('/api/assets/gold/list', authenticateToken, (req, res) => {
 app.delete('/api/assets/gold/:id', authenticateToken, (req, res) => {
     const userId = req.user.id;
     const assetId = req.params.id;
-    
+
     // نتحقق من AssetId وأيضاً UserId لضمان أمان البيانات (لا يمكن حذف أصل لمستخدم آخر)
     const query = 'DELETE FROM Assets WHERE Id = ? AND UserId = ?';
-    
+
     db.query(query, [assetId, userId], (err, result) => {
         if (err) {
             console.error("❌ Delete error:", err.message);
             return res.status(500).json({ error: 'Database error' });
         }
-        
+
         if (result.affectedRows === 0) {
             return res.status(404).json({ error: 'Asset not found or unauthorized' });
         }
@@ -236,12 +320,12 @@ app.delete('/api/assets/gold/:id', authenticateToken, (req, res) => {
 // ✅ Corrected Gold Assets Route with LIVE Data
 app.get('/api/assets/gold', authenticateToken, async (req, res) => {
     const userId = req.user.id;
-    
+
     try {
         // 1. جلب السعر المباشر من API خارجي
         // ملاحظة: يمكنك وضع الـ API Key في ملف .env
         const GOLD_API_KEY = process.env.GOLD_API_KEY || 'YOUR_FREE_API_KEY_HERE';
-        
+
         const goldRes = await fetch('https://www.goldapi.io/api/XAU/USD', {
             headers: {
                 'x-access-token': GOLD_API_KEY,
@@ -250,10 +334,10 @@ app.get('/api/assets/gold', authenticateToken, async (req, res) => {
         });
 
         const goldData = await goldRes.json();
-        
+
         // التحقق من صحة البيانات القادمة من الـ API
         // السعر العالمي للأونصة بالدولار
-        const livePricePerOunceUSD = goldData.price || 2700.00; 
+        const livePricePerOunceUSD = goldData.price || 2700.00;
         const usdToSar = 3.75;
         const gramsPerOunce = 31.1035;
 
@@ -272,9 +356,9 @@ app.get('/api/assets/gold', authenticateToken, async (req, res) => {
             let totalCost = 0;
 
             results.forEach(asset => {
-                const weight = parseFloat(asset.WeightInOunces) || 0; 
+                const weight = parseFloat(asset.WeightInOunces) || 0;
                 const pricePerGram = parseFloat(asset.PurchasePricePerOunce) || 0;
-                
+
                 totalGrams += weight;
                 totalCost += (weight * pricePerGram);
             });
@@ -322,27 +406,27 @@ app.post('/api/assets/gold', authenticateToken, (req, res) => {
     }
 
     const query = "INSERT INTO Assets (UserId, AssetType, WeightInOunces, PurchasePricePerOunce) VALUES (?, 'Gold', ?, ?)";
-    
+
     db.query(query, [userId, weight, price], (err, result) => {
         if (err) {
             console.error('❌ Database error while adding asset:', err.message);
             console.error('❌ SQL Error details:', err);
-            return res.status(500).json({ 
-                error: 'Failed to add asset', 
+            return res.status(500).json({
+                error: 'Failed to add asset',
                 details: err.message,
-                sqlError: err.code 
+                sqlError: err.code
             });
         }
-        
+
         console.log('✅ Asset added successfully:', {
             insertId: result.insertId,
             affectedRows: result.affectedRows
         });
-        
-        res.status(201).json({ 
-            success: true, 
-            message: 'تم إضافة الأصل بنجاح', 
-            id: result.insertId 
+
+        res.status(201).json({
+            success: true,
+            message: 'تم إضافة الأصل بنجاح',
+            id: result.insertId
         });
     });
 });
@@ -611,7 +695,7 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
         { keys: ["aljazira", "الجزيرة"], name: "تكافل الجزيرة", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
     ];
 
-function findMerchantInDictionary(text) {
+    function findMerchantInDictionary(text) {
         const cleanText = text.toLowerCase();
 
         for (let merchant of merchantsDictionary) {
