@@ -360,43 +360,52 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
         }
     }
 
-    // =========================================
-    // 🤖 Use AI only for unknown transactions
+// =========================================
+    // 🤖 استخدام الذكاء الاصطناعي (Groq بدلاً من Gemini)
     // =========================================
     if (needsAI && !isIncome) {
-        console.log('🤖 [AI Processing]: Merchant not in dictionary, sending request to Gemini...');
+        console.log('🤖 [Groq AI]: لم يتم العثور على المتجر في القاموس المحلي، جاري الإرسال إلى Groq...');
         try {
+            /* // ⛔ تم تعليق كود Gemini مؤقتاً
             const { GoogleGenAI } = require('@google/genai');
             const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+            */
+
+            // ✅ تفعيل محرك Groq الصاروخي
+            const Groq = require('groq-sdk');
+            const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
             
             const allowedCategories = ["المطاعم والكافيهات", "المنزل والمقاضي", "التسوق", "الصحة والجمال", "السيارة والمواصلات", "فواتير واشتراكات", "مصروفات عامة"];
             
             const prompt = `أنت خبير مالي في السعودية. هذه رسالة بنكية: "${rawText}". 
             استخرج اسم المتجر وصنفه (اختر التصنيف من هنا فقط: ${JSON.stringify(allowedCategories)}).
             أمثلة: "Abdulsama" هو عبدالصمد القرشي. "TAJ ALHAL" هو تاج الحلا.
-            أريد الرد فقط بصيغة JSON:
+            أريد الرد فقط بصيغة JSON صالحة بهذا الشكل:
             {"CleanName": "اسم المحل الواضح", "Category": "التصنيف", "SubCategory": "التصنيف الفرعي"}`;
 
-            const response = await ai.models.generateContent({
-                model: "gemini-3-flash", // I changed this to the stable version to avoid 503 errors
-                contents: prompt,
+            const chatCompletion = await groq.chat.completions.create({
+                messages: [{ role: 'user', content: prompt }],
+                model: 'llama3-70b-8192', // نموذج ذكي جداً من شركة ميتا وممتاز في اللغة العربية
+                temperature: 0.1, // رقم منخفض جداً لمنع الموديل من التأليف والهلوسة
+                response_format: { type: 'json_object' } // 👈 هذه الميزة تجبر Groq على الرد بـ JSON فقط وبدون أي كلام إضافي
             });
 
-            let aiText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
+            // استخراج الرد
+            let aiText = chatCompletion.choices[0].message.content.trim();
             const aiData = JSON.parse(aiText);
 
-            console.log('✅ [AI - Success]:', aiData);
+            console.log('✅ [Groq - نجاح]:', aiData);
 
-            if (aiData.CleanName) description = aiData.CleanName;
+            if (aiData.CleanName && aiData.CleanName !== "غير معروف") description = aiData.CleanName;
             if (aiData.Category) category = aiData.Category;
             if (aiData.SubCategory) subCategory = aiData.SubCategory;
 
         } catch (error) {
-            console.error("❌ [AI - Error]:", error.message);
-            // Fallback plan if AI fails due to high demand
+            console.error("❌ [Groq - خطأ]:", error.message);
+            // خطة بديلة لو تعطل الذكاء الاصطناعي
             const fallbackMatch = rawText.match(/لـ\s*([A-Za-z\s]+)(?:\n|\r|؜)/i);
             if (fallbackMatch) description = fallbackMatch[1].trim();
-            console.log(`⚠️ [Fallback]: Used simple text extraction (${description}).`);
+            console.log(`⚠️ [الخطة البديلة]: تم استخدام استخراج النص البسيط (${description}).`);
         }
     }
 
@@ -470,6 +479,7 @@ app.delete('/api/budgets/:category', authenticateToken, (req, res) => {
 // AI Advisor Route
 const { GoogleGenAI } = require('@google/genai');
 
+// AI Advisor Route
 app.get('/api/advisor', authenticateToken, (req, res) => {
     const userId = req.user.id;
     const query = 'SELECT * FROM Transactions WHERE UserId = ? AND MONTH(TransactionDate) = MONTH(CURRENT_DATE()) AND YEAR(TransactionDate) = YEAR(CURRENT_DATE())';
@@ -498,15 +508,36 @@ app.get('/api/advisor', authenticateToken, (req, res) => {
         كن مشجعاً، وإذا كان الصرف أعلى من الدخل حذره بلطف. لا تستخدم أي مقدمات مثل "بناءً على البيانات".`;
 
         try {
+            /* // ⛔ تم تعليق كود Gemini مؤقتاً
+            const { GoogleGenAI } = require('@google/genai');
             const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
             const response = await ai.models.generateContent({
                 model: "gemini-3-flash-preview",
                 contents: prompt,
             });
             res.json({ advice: response.text.trim() });
+            */
+
+            // ✅ تفعيل محرك Groq للحصول على نصيحة سريعة
+            console.log('\n🤖 [Groq Advisor]: جاري طلب النصيحة المالية من Groq...');
+            
+            const Groq = require('groq-sdk');
+            const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+            const chatCompletion = await groq.chat.completions.create({
+                messages: [{ role: 'user', content: prompt }],
+                model: 'llama3-70b-8192', // نموذج ذكي ومبدع ويدعم العربية
+                temperature: 0.7, // إعطاء مساحة للإبداع في النصيحة
+            });
+
+            const aiAdvice = chatCompletion.choices[0].message.content.trim();
+            console.log('✅ [Groq Advisor - نجاح]: تم توليد النصيحة بنجاح.');
+            
+            res.json({ advice: aiAdvice });
+
         } catch (error) {
-            console.error('AI Error:', error);
-            res.status(500).json({ error: `خطأ من جوجل: ${error.message}` });
+            console.error('❌ [Groq Advisor - خطأ]:', error);
+            res.status(500).json({ error: `خطأ من الخادم: ${error.message}` });
         }
     });
 });
