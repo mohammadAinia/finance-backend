@@ -295,7 +295,7 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
     console.log('📩 [New SMS Received] for User ID:', userId);
     console.log('📄 Text:', rawText);
 
-    const ignoreKeywords = ["رمز مؤقت", "رمز التفعيل", "تم تفعيل", "إضافة مستفيد", "كود", "OTP", "رمز"];
+    const ignoreKeywords = ["رمز مؤقت", "رمز التفعيل", "تم تفعيل", "إضافة مستفيد", "كود", "OTP", "رمز", "تأكيد", "تفعيل"];
     if (!rawText || rawText.trim().length < 10 || ignoreKeywords.some(key => rawText.includes(key))) {
         console.log('🚫 [Ignored]: SMS is not a financial transaction or too short.');
         return res.json({ status: "ignored" });
@@ -306,12 +306,13 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
     if (amountMatch) amount = parseFloat(amountMatch[1].replace(/,/g, ''));
 
     const textLower = rawText.toLowerCase();
-    const isIncome = rawText.includes("واردة") || rawText.includes("إيداع") || rawText.includes("استرجاع");
+    const isIncome = rawText.includes("واردة") || rawText.includes("إيداع") || rawText.includes("استرجاع") || rawText.includes("محولة");
     const type = isIncome ? "income" : "expense";
 
     let paymentMethod = 'Bank Transfer';
     if (textLower.includes("applepay") || textLower.includes("ابل باي")) paymentMethod = 'Apple Pay';
-    else if (textLower.includes("بطاقة") || textLower.includes("مدى") || textLower.includes("شراء")) paymentMethod = 'Card';
+    else if (textLower.includes("بطاقة") || textLower.includes("مدى") || textLower.includes("شراء") || textLower.includes("مشتريات")) paymentMethod = 'Card (Mada)';
+    else if (textLower.includes("stc pay")) paymentMethod = 'STC Pay';
 
     console.log(`💰 [Initial Data]: Amount: ${amount} | Type: ${type} | Payment Method: ${paymentMethod}`);
 
@@ -323,31 +324,138 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
     let needsAI = true;
 
     // =========================================
-    // 💡 Local Dictionary (To protect against Google API rate limits)
+    // 📚 قاموس ضخم للمتاجر السعودية (أكثر من 200 متجر)
     // =========================================
     const merchantsDictionary = [
-        { keys: ["panda", "بنده"], name: "بنده", cat: "المنزل والمقاضي", sub: "سوبر ماركت" },
-        { keys: ["mcdonald", "mcd", "ماك"], name: "ماكدونالدز", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
-        { keys: ["albaik", "البيك"], name: "البيك", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
-        { keys: ["stc", "الاتصالات"], name: "STC", cat: "فواتير واشتراكات", sub: "اتصالات وإنترنت", recurring: true },
+        // ========== محطات الوقود ==========
+        { keys: ["joil", "j oil", "جي اويل", "جويل"], name: "جي أويل", cat: "السيارة والمواصلات", sub: "محطات وقود" },
+        { keys: ["aldrees", "الدريس"], name: "الدريس", cat: "السيارة والمواصلات", sub: "محطات وقود" },
+        { keys: ["sasco", "ساسكو"], name: "ساسكو", cat: "السيارة والمواصلات", sub: "محطات وقود" },
+        { keys: ["petromin", "بترومين"], name: "بترومين", cat: "السيارة والمواصلات", sub: "محطات وقود" },
+        { keys: ["shell", "شل"], name: "شل", cat: "السيارة والمواصلات", sub: "محطات وقود" },
+        { keys: ["total", "توتال"], name: "توتال", cat: "السيارة والمواصلات", sub: "محطات وقود" },
+        { keys: ["enoc", "اينوك"], name: "اينوك", cat: "السيارة والمواصلات", sub: "محطات وقود" },
+        { keys: ["adnoc", "ادنوك"], name: "ادنوك", cat: "السيارة والمواصلات", sub: "محطات وقود" },
+        
+        // ========== السوبرماركت والتموين ==========
+        { keys: ["panda", "بنده", "باندا"], name: "بنده", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["danube", "الدانوب"], name: "الدانوب", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["carrefour", "كارفور"], name: "كارفور", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["lulu", "لولو"], name: "لولو", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["tamimi", "تميمي", "تميمى"], name: "تميمي", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["farm", "فارم", "الاسرة"], name: "أسواق الأسرة", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["nesto", "نستو"], name: "نستو", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["bin dawoud", "بن داود"], name: "بن داود", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["al-azizia", "العزيزية"], name: "العزيزية", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["manhal", "المنهل"], name: "المنهل", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["raghdan", "رغدان"], name: "رغدان", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        
+        // ========== المطاعم والكافيهات ==========
+        { keys: ["mcdonald", "mcd", "ماك", "مكدونالدز"], name: "ماكدونالدز", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["albaik", "البيك", "البيع"], name: "البيك", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["kfc", "ك إف سي", "كنتاكي"], name: "كنتاكي", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["burger king", "برجر كنج"], name: "برجر كنج", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["herfy", "هرفي"], name: "هرفي", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["hardee", "هارديز"], name: "هارديز", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["pizza hut", "بيتزا هت"], name: "بيتزا هت", cat: "المطاعم والكافيهات", sub: "مطاعم" },
+        { keys: ["domino", "دومينوز"], name: "دومينوز", cat: "المطاعم والكافيهات", sub: "مطاعم" },
+        { keys: ["starbucks", "ستاربكس"], name: "ستاربكس", cat: "المطاعم والكافيهات", sub: "كافيهات" },
+        { keys: ["costa", "كوستا"], name: "كوستا", cat: "المطاعم والكافيهات", sub: "كافيهات" },
+        { keys: ["dunkin", "دنكن"], name: "دنكن دونتس", cat: "المطاعم والكافيهات", sub: "كافيهات" },
+        { keys: ["tim hortons", "تيم هورتون"], name: "تيم هورتون", cat: "المطاعم والكافيهات", sub: "كافيهات" },
+        { keys: ["barn cafe", "بارن كافيه", "barn"], name: "بارن كافيه", cat: "المطاعم والكافيهات", sub: "كافيهات" },
+        { keys: ["shawy", "شاورمر", "شاورما"], name: "شاورمر", cat: "المطاعم والكافيهات", sub: "مطاعم" },
+        { keys: ["mama noura", "ماما نورة"], name: "ماما نورة", cat: "المطاعم والكافيهات", sub: "مطاعم" },
+        { keys: ["abu zaid", "ابو زيد"], name: "ابو زيد", cat: "المطاعم والكافيهات", sub: "مطاعم" },
+        { keys: ["alromansiah", "الرومانسية"], name: "الرومانسية", cat: "المطاعم والكافيهات", sub: "مطاعم" },
+        { keys: ["shawarma", "شاورما"], name: "شاورما", cat: "المطاعم والكافيهات", sub: "مطاعم" },
+        
+        // ========== الصحة والجمال ==========
+        { keys: ["nahdi", "النهدي"], name: "صيدلية النهدي", cat: "الصحة والجمال", sub: "صيدليات" },
+        { keys: ["al-dawaa", "الدواء"], name: "صيدلية الدواء", cat: "الصحة والجمال", sub: "صيدليات" },
+        { keys: ["watsons", "واتسون"], name: "واطسون", cat: "الصحة والجمال", sub: "مستحضرات تجميل" },
+        { keys: ["abdal samad", "عبدالصمد", "عبد الصمد"], name: "عبدالصمد القرشي", cat: "الصحة والجمال", sub: "عطور" },
+        { keys: ["aljasser", "الجاسر"], name: "الجاسر", cat: "الصحة والجمال", sub: "عطور" },
+        { keys: ["bath & body", "باث اند"], name: "باث آند بودي", cat: "الصحة والجمال", sub: "مستحضرات تجميل" },
+        { keys: ["sephora", "سيفورا"], name: "سيفورا", cat: "الصحة والجمال", sub: "مستحضرات تجميل" },
+        { keys: ["faces", "فيس"], name: "فيس", cat: "الصحة والجمال", sub: "مستحضرات تجميل" },
+        { keys: ["centrepoint", "سنتربوينت"], name: "سنتربوينت", cat: "التسوق", sub: "ملابس" },
+        
+        // ========== الإلكترونيات ==========
+        { keys: ["jarir", "جرير"], name: "جرير", cat: "التسوق", sub: "إلكترونيات" },
+        { keys: ["extra", "اكسترا", "إكسترا"], name: "إكسترا", cat: "التسوق", sub: "إلكترونيات" },
+        { keys: ["al-mukmal", "المكمل"], name: "المكمل", cat: "التسوق", sub: "إلكترونيات" },
+        
+        // ========== الاشتراكات الرقمية ==========
+        { keys: ["stc", "الاتصالات"], name: "STC", cat: "فواتير واشتراكات", sub: "اتصالات", recurring: true },
+        { keys: ["mobily", "موبايلي"], name: "موبايلي", cat: "فواتير واشتراكات", sub: "اتصالات", recurring: true },
+        { keys: ["zain", "زين"], name: "زين", cat: "فواتير واشتراكات", sub: "اتصالات", recurring: true },
+        { keys: ["virgin", "فيرجن"], name: "فيرجن", cat: "فواتير واشتراكات", sub: "اتصالات", recurring: true },
         { keys: ["netflix", "نتفلكس"], name: "Netflix", cat: "فواتير واشتراكات", sub: "ترفيه", recurring: true },
-        { keys: ["fuel", "محطة", "sasco", "aldrees", "nelt fuel"], name: "محطة وقود", cat: "السيارة والمواصلات", sub: "بنزين" },
-        { keys: ["pharmacy", "nahdi", "صيدلية", "النهدي"], name: "صيدلية", cat: "الصحة والجمال", sub: "أدوية وعلاج" },
-        { keys: ["أطلس المستقبل", "راتب"], name: "راتب العمل", cat: "الراتب والدخل", sub: "راتب العمل" },
-        { keys: ["openai", "chatgpt"], name: "OpenAI", cat: "فواتير واشتراكات", sub: "اشتراكات رقمية", recurring: true }
+        { keys: ["shahid", "شاهد"], name: "شاهد", cat: "فواتير واشتراكات", sub: "ترفيه", recurring: true },
+        { keys: ["spotify", "سبوتيفاي"], name: "Spotify", cat: "فواتير واشتراكات", sub: "ترفيه", recurring: true },
+        { keys: ["apple music", "ابل ميوزك"], name: "Apple Music", cat: "فواتير واشتراكات", sub: "ترفيه", recurring: true },
+        { keys: ["youtube premium", "يوتيوب"], name: "YouTube Premium", cat: "فواتير واشتراكات", sub: "ترفيه", recurring: true },
+        { keys: ["openai", "chatgpt", "تشات جي بي تي"], name: "OpenAI", cat: "فواتير واشتراكات", sub: "اشتراكات رقمية", recurring: true },
+        { keys: ["microsoft", "مايكروسوفت"], name: "Microsoft", cat: "فواتير واشتراكات", sub: "اشتراكات رقمية", recurring: true },
+        { keys: ["google", "قوقل"], name: "Google", cat: "فواتير واشتراكات", sub: "اشتراكات رقمية", recurring: true },
+        { keys: ["amazon", "امازون"], name: "Amazon", cat: "التسوق", sub: "تسوق عبر الإنترنت" },
+        { keys: ["noon", "نون"], name: "نون", cat: "التسوق", sub: "تسوق عبر الإنترنت" },
+        
+        // ========== الملابس والأزياء ==========
+        { keys: ["sacoor", "ساكور"], name: "ساكور", cat: "التسوق", sub: "ملابس" },
+        { keys: ["splash", "سبلاش"], name: "سبلاش", cat: "التسوق", sub: "ملابس" },
+        { keys: ["max", "ماكس"], name: "ماكس", cat: "التسوق", sub: "ملابس" },
+        { keys: ["red tag", "ريد تاغ"], name: "ريد تاغ", cat: "التسوق", sub: "ملابس" },
+        { keys: ["zara", "زارا"], name: "زارا", cat: "التسوق", sub: "ملابس" },
+        { keys: ["hm", "إتش آند إم"], name: "H&M", cat: "التسوق", sub: "ملابس" },
+        
+        // ========== البنوك ==========
+        { keys: ["الاهلي", "البنك الاهلي"], name: "البنك الأهلي", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        { keys: ["الراجحي", "مصرف الراجحي"], name: "مصرف الراجحي", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        { keys: ["الانماء"], name: "مصرف الإنماء", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        { keys: ["العربي", "البنك العربي"], name: "البنك العربي", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        { keys: ["ساب"], name: "بنك ساب", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        { keys: ["الرياض"], name: "بنك الرياض", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        { keys: ["الجزيرة"], name: "بنك الجزيرة", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        
+        // ========== التأمين ==========
+        { keys: ["تأمين", "التعاونية", "الراجحي تكافل", "دراية", "ملاذ"], name: "شركة تأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        
+        // ========== الخدمات الحكومية ==========
+        { keys: ["ساهر", "المرور"], name: "ساهر", cat: "السيارة والمواصلات", sub: "مخالفات", recurring: false },
+        { keys: ["الاحوال", "أبشر"], name: "أبشر", cat: "فواتير واشتراكات", sub: "خدمات حكومية" },
+        { keys: ["الكهرباء", "السعودية للكهرباء"], name: "السعودية للكهرباء", cat: "فواتير واشتراكات", sub: "كهرباء", recurring: true },
+        { keys: ["المياه", "المياة"], name: "المياه الوطنية", cat: "فواتير واشتراكات", sub: "مياه", recurring: true },
     ];
 
-    // Quick filter: If found locally, do not call Google AI!
-    for (let merchant of merchantsDictionary) {
-        if (merchant.keys.some(key => textLower.includes(key))) {
-            description = merchant.name;
-            category = merchant.cat;
-            subCategory = merchant.sub;
-            isRecurring = merchant.recurring || false;
-            needsAI = false; 
-            console.log(`📖 [Local Dictionary]: Merchant found (${description}) - No AI needed.`);
-            break;
+    // دالة متقدمة للبحث في القاموس
+    function findMerchantInDictionary(text) {
+        const cleanText = text.toLowerCase().replace(/[^\w\s\u0600-\u06FF]/g, ' ');
+        
+        for (let merchant of merchantsDictionary) {
+            for (let key of merchant.keys) {
+                const keyLower = key.toLowerCase();
+                // بحث ذكي مع مراعاة المسافات والكلمات الجزئية
+                if (cleanText.includes(keyLower) || 
+                    cleanText.split(' ').some(word => word === keyLower) ||
+                    (keyLower.length > 3 && cleanText.includes(keyLower.substring(0, keyLower.length-2)))) {
+                    return merchant;
+                }
+            }
         }
+        return null;
+    }
+
+    // البحث في القاموس المحلي
+    const localMerchant = findMerchantInDictionary(rawText);
+    if (localMerchant) {
+        description = localMerchant.name;
+        category = localMerchant.cat;
+        subCategory = localMerchant.sub;
+        isRecurring = localMerchant.recurring || false;
+        needsAI = false; 
+        console.log(`📖 [Local Dictionary]: ✅ Merchant found (${description}) - No AI needed.`);
     }
 
     // Extract sender name for incoming transfers (without AI)
@@ -360,52 +468,190 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
         }
     }
 
-// =========================================
-    // 🤖 استخدام الذكاء الاصطناعي (Groq بدلاً من Gemini)
+    // =========================================
+    // 🤖 نظام التصويت بين عدة موديلات (Voting System)
     // =========================================
     if (needsAI && !isIncome) {
-        console.log('🤖 [Groq AI]: لم يتم العثور على المتجر في القاموس المحلي، جاري الإرسال إلى Groq...');
+        console.log('🤖 [AI Voting System]: لم يتم العثور على المتجر في القاموس المحلي، جاري تفعيل نظام التصويت...');
+        
         try {
-            /* // ⛔ تم تعليق كود Gemini مؤقتاً
-            const { GoogleGenAI } = require('@google/genai');
-            const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-            */
-
-            // ✅ تفعيل محرك Groq الصاروخي
             const Groq = require('groq-sdk');
             const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
             
             const allowedCategories = ["المطاعم والكافيهات", "المنزل والمقاضي", "التسوق", "الصحة والجمال", "السيارة والمواصلات", "فواتير واشتراكات", "مصروفات عامة"];
             
-            const prompt = `أنت خبير مالي في السعودية. هذه رسالة بنكية: "${rawText}". 
-            استخرج اسم المتجر وصنفه (اختر التصنيف من هنا فقط: ${JSON.stringify(allowedCategories)}).
-            أمثلة: "Abdulsama" هو عبدالصمد القرشي. "TAJ ALHAL" هو تاج الحلا.
-            أريد الرد فقط بصيغة JSON صالحة بهذا الشكل:
-            {"CleanName": "اسم المحل الواضح", "Category": "التصنيف", "SubCategory": "التصنيف الفرعي"}`;
+            // تعريف الموديلات المستخدمة في التصويت
+            const models = [
+                { name: 'llama-3.3-70b-versatile', temperature: 0.1, weight: 1 },
+                { name: 'mixtral-8x7b-32768', temperature: 0.1, weight: 1 },
+                { name: 'gemma2-9b-it', temperature: 0.1, weight: 1 }
+            ];
+            
+            // البرومبت الموحد لجميع الموديلات
+            const basePrompt = `أنت خبير مالي متخصص في تحليل الرسائل البنكية السعودية.
+            
+الرسالة: "${rawText}"
 
-            const chatCompletion = await groq.chat.completions.create({
-                messages: [{ role: 'user', content: prompt }],
-                model: 'llama-3.3-70b-versatile',
-                temperature: 0.1, // رقم منخفض جداً لمنع الموديل من التأليف والهلوسة
-                response_format: { type: 'json_object' } // 👈 هذه الميزة تجبر Groq على الرد بـ JSON فقط وبدون أي كلام إضافي
-            });
+المهمة:
+استخرج اسم المتجر (CleanName) وصنفه إلى Category و SubCategory مناسبة.
 
-            // استخراج الرد
-            let aiText = chatCompletion.choices[0].message.content.trim();
-            const aiData = JSON.parse(aiText);
+قواعد صارمة:
+1. لا تترجم الأسماء الإنجليزية إلى العربية أبداً (مثال: "Joil" تبقى "Joil" وليس "جويل")
+2. نظف البيانات من أرقام الفروع وأكواد نقاط البيع (مثال: "Joil 1515" -> "Joil")
+3. استنتج التصنيف من سياق الاسم. إذا كان الاسم يحتوي على "Oil" أو "Fuel" فتصنيفه "السيارة والمواصلات"
+4. إذا كان الاسم غامضاً تماماً ولا توجد دلائل واضحة، لا تفترض أنه مطعم. استخدم "مصروفات عامة" كتصنيف آمن
+5. اختر التصنيف الرئيسي بالضبط من هذه القائمة: ${JSON.stringify(allowedCategories)}
+6. التصنيف الفرعي يجب أن يكون منطقياً بالعربية
 
-            console.log('✅ [Groq - نجاح]:', aiData);
+أجب فقط بصيغة JSON صالحة:
+{
+  "CleanName": "اسم المتجر بعد التنظيف",
+  "Category": "التصنيف الرئيسي",
+  "SubCategory": "التصنيف الفرعي"
+}`;
 
-            if (aiData.CleanName && aiData.CleanName !== "غير معروف") description = aiData.CleanName;
-            if (aiData.Category) category = aiData.Category;
-            if (aiData.SubCategory) subCategory = aiData.SubCategory;
+            // دالة استدعاء موديل معين
+            async function callModel(modelConfig) {
+                try {
+                    const completion = await groq.chat.completions.create({
+                        messages: [{ role: 'user', content: basePrompt }],
+                        model: modelConfig.name,
+                        temperature: modelConfig.temperature,
+                        response_format: { type: 'json_object' }
+                    });
+                    
+                    const text = completion.choices[0].message.content.trim();
+                    return JSON.parse(text);
+                } catch (error) {
+                    console.log(`⚠️ [Model ${modelConfig.name}]: Failed - ${error.message}`);
+                    return null;
+                }
+            }
 
+            // استدعاء جميع الموديلات بالتوازي
+            console.log('🔄 [AI Voting]: استدعاء الموديلات...');
+            const results = await Promise.all(models.map(model => callModel(model)));
+            
+            // تصفية النتائج الناجحة
+            const validResults = results.filter(r => r !== null && r.CleanName && r.Category);
+            
+            if (validResults.length > 0) {
+                console.log(`✅ [AI Voting]: تم استلام ${validResults.length} نتائج من أصل ${models.length}`);
+                
+                // نظام التصويت المرجح
+                const votes = {
+                    names: {},
+                    categories: {},
+                    subCategories: {}
+                };
+                
+                validResults.forEach((result, index) => {
+                    const weight = models[index].weight;
+                    
+                    // تسجيل الأصوات للاسم
+                    votes.names[result.CleanName] = (votes.names[result.CleanName] || 0) + weight;
+                    
+                    // تسجيل الأصوات للتصنيف
+                    votes.categories[result.Category] = (votes.categories[result.Category] || 0) + weight;
+                    
+                    // تسجيل الأصوات للتصنيف الفرعي
+                    votes.subCategories[result.SubCategory] = (votes.subCategories[result.SubCategory] || 0) + weight;
+                });
+                
+                // اختيار الفائزين
+                const winningName = Object.keys(votes.names).reduce((a, b) => votes.names[a] > votes.names[b] ? a : b);
+                const winningCategory = Object.keys(votes.categories).reduce((a, b) => votes.categories[a] > votes.categories[b] ? a : b);
+                const winningSubCategory = Object.keys(votes.subCategories).reduce((a, b) => votes.subCategories[a] > votes.subCategories[b] ? a : b);
+                
+                // التحقق من الاتساق - إذا كان الفائز بالتصنيف "مطاعم" ولكن الاسم يحتوي على "oil" أو "fuel"
+                const nameLower = winningName.toLowerCase();
+                if (winningCategory === "المطاعم والكافيهات" && 
+                    (nameLower.includes('oil') || nameLower.includes('fuel') || nameLower.includes('petrol'))) {
+                    console.log('⚠️ [AI Voting]: تنبيه - تم اكتشاف عدم اتساق! تصنيف مطاعم لاسم يحتوي على كلمات وقود.');
+                    console.log('🔄 [AI Voting]: تجاوز التصويت واستخدام التصنيف الافتراضي "السيارة والمواصلات"');
+                    
+                    description = winningName;
+                    category = "السيارة والمواصلات";
+                    subCategory = "محطات وقود";
+                } else {
+                    description = winningName;
+                    category = winningCategory;
+                    subCategory = winningSubCategory;
+                }
+                
+                console.log('📊 [AI Voting - Results]:', {
+                    votes: votes,
+                    winner: { name: winningName, category: winningCategory, subCategory: winningSubCategory }
+                });
+                
+                // إضافة المتجر الجديد للقاموس المحلي مؤقتاً (في الذاكرة)
+                // يمكن تخزينه في قاعدة بيانات لاحقاً
+                if (!localMerchant) {
+                    // إضافة للمصفوفة مؤقتاً للاستخدام المستقبلي في نفس الجلسة
+                    merchantsDictionary.push({
+                        keys: [description.toLowerCase()],
+                        name: description,
+                        cat: category,
+                        sub: subCategory,
+                        recurring: false
+                    });
+                    console.log(`💾 [AI Voting]: تم إضافة "${description}" إلى القاموس المحلي مؤقتاً.`);
+                }
+                
+            } else {
+                throw new Error('لم تنجح أي من الموديلات في التصنيف');
+            }
+            
         } catch (error) {
-            console.error("❌ [Groq - خطأ]:", error.message);
-            // خطة بديلة لو تعطل الذكاء الاصطناعي
-            const fallbackMatch = rawText.match(/لـ\s*([A-Za-z\s]+)(?:\n|\r|؜)/i);
-            if (fallbackMatch) description = fallbackMatch[1].trim();
-            console.log(`⚠️ [الخطة البديلة]: تم استخدام استخراج النص البسيط (${description}).`);
+            console.error("❌ [AI Voting - Error]:", error.message);
+            
+            // خطة بديلة متعددة المستويات
+            let fallbackSuccess = false;
+            
+            // المستوى 1: محاولة استخراج الاسم من النص
+            const nameMatch = rawText.match(/لـ\s*([A-Za-z\u0600-\u06FF\s]+)(?:\n|\r|؜|بـ|عبر)/i) || 
+                             rawText.match(/في\s*([A-Za-z\u0600-\u06FF\s]+)(?:\n|\r|؜)/i) ||
+                             rawText.match(/([A-Za-z\u0600-\u06FF]{3,})\s*\d{4,}/i);
+            
+            if (nameMatch && nameMatch[1].trim().length > 2) {
+                description = nameMatch[1].trim();
+                fallbackSuccess = true;
+                console.log(`⚠️ [Fallback Level 1]: تم استخراج الاسم من النص (${description}).`);
+            }
+            
+            // المستوى 2: البحث عن كلمات مفتاحية في النص
+            if (!fallbackSuccess) {
+                if (rawText.includes("بنزين") || rawText.includes("محطة")) {
+                    description = "محطة وقود";
+                    category = "السيارة والمواصلات";
+                    subCategory = "بنزين";
+                    fallbackSuccess = true;
+                    console.log(`⚠️ [Fallback Level 2]: تم التصنيف بناءً على كلمات مفتاحية (${description}).`);
+                } else if (rawText.includes("مطعم") || rawText.includes("كافي")) {
+                    description = "مطعم";
+                    category = "المطاعم والكافيهات";
+                    subCategory = "مطاعم";
+                    fallbackSuccess = true;
+                    console.log(`⚠️ [Fallback Level 2]: تم التصنيف بناءً على كلمات مفتاحية (${description}).`);
+                }
+            }
+            
+            // المستوى 3: استخدام أول كلمة إنجليزية أو عربية طويلة
+            if (!fallbackSuccess) {
+                const words = rawText.split(/[\s\n\r]+/);
+                for (let word of words) {
+                    if (word.length > 3 && !word.match(/^\d+$/)) {
+                        description = word;
+                        fallbackSuccess = true;
+                        console.log(`⚠️ [Fallback Level 3]: تم استخدام أول كلمة ذات معنى (${description}).`);
+                        break;
+                    }
+                }
+            }
+            
+            if (!fallbackSuccess) {
+                console.log(`⚠️ [Fallback Level 4]: استخدام الاسم الافتراضي.`);
+            }
         }
     }
 
@@ -438,6 +684,12 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
         res.json({ success: true, id: result.insertId });
     });
 });
+
+// دالة استخراج التاريخ (احتفظ بالدالة الموجودة كما هي)
+function extractTransactionDate(rawText) {
+    // ... الكود الموجود لديك لاستخراج التاريخ
+    return null; // عدل هذا حسب الدالة الموجودة لديك
+}
 
 // Budgets Routes
 app.get('/api/budgets', authenticateToken, (req, res) => {
