@@ -257,7 +257,7 @@ app.post('/api/assets/gold', authenticateToken, (req, res) => {
     const userId = req.user.id;
     const { WeightInOunces, PurchasePricePerOunce } = req.body;
 
-    const query = 'INSERT INTO Assets (UserId, AssetType, WeightInOunces, PurchasePricePerOunce) VALUES (?, "Gold", ?, ?)';
+    const query = "INSERT INTO Assets (UserId, AssetType, WeightInOunces, PurchasePricePerOunce) VALUES (?, 'Gold', ?, ?)";
     db.query(query, [userId, WeightInOunces, PurchasePricePerOunce], (err, result) => {
         if (err) {
             console.error('❌ Database error while adding asset:', err.message); // This will print the exact reason for failure in your server logs
