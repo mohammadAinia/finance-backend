@@ -198,66 +198,65 @@ app.get('/api/auth/mobile-token', authenticateToken, (req, res) => {
     res.json({ mobileToken });
 });
 
-// ✅ Corrected Gold Assets Route
+// --- أضف هذه المسارات في server.js ---
+
+// 1. جلب قائمة المشتريات بالتفصيل (للعرض والحذف)
+app.get('/api/assets/gold/list', authenticateToken, (req, res) => {
+    const userId = req.user.id;
+    const query = 'SELECT * FROM Assets WHERE UserId = ? AND AssetType = "Gold" ORDER BY PurchaseDate DESC';
+    
+    db.query(query, [userId], (err, results) => {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        res.json(results);
+    });
+});
+
+// 2. حذف عملية شراء
+app.delete('/api/assets/gold/:id', authenticateToken, (req, res) => {
+    const userId = req.user.id;
+    const assetId = req.params.id;
+    
+    db.query('DELETE FROM Assets WHERE Id = ? AND UserId = ?', [assetId, userId], (err, result) => {
+        if (err) return res.status(500).json({ error: 'Database error' });
+        res.json({ success: true, message: 'تم الحذف بنجاح' });
+    });
+});
+
+// 3. تحديث مسار الجلب الرئيسي (Calculations in Grams)
 app.get('/api/assets/gold', authenticateToken, async (req, res) => {
     const userId = req.user.id;
-    console.log(`📊 Fetching gold assets for user ID: ${userId}`);
     
-    const liveGoldPricePerOunce = 2700.50; 
-    const usdToSar = 3.75;
-    const liveGoldPriceSAR = liveGoldPricePerOunce * usdToSar;
+    // Updated Live Prices (Example based on current market)
+    const livePricePerOunceUSD = 2740.00; // Global USD price
+    const livePricePerGramSAR = (livePricePerOunceUSD * 3.75) / 31.1035; // Convert to Gram SAR
 
-    // FIX: Using parameters (?) for both UserId and AssetType to avoid SQL errors
-    const query = 'SELECT * FROM Assets WHERE UserId = ? AND AssetType = ?';
-    
-    db.query(query, [userId, 'Gold'], (err, results) => {
-        if (err) {
-            console.error("❌ Database fetch error:", err.message);
-            return res.status(500).json({ error: 'Database error', details: err.message });
-        }
-        
-        console.log(`📦 Found ${results.length} gold assets for user ${userId}`);
-        
-        if (results.length === 0) {
-            return res.json({ 
-                totalOunces: 0, 
-                currentValue: 0, 
-                totalCost: 0, 
-                profitLoss: 0, 
-                profitLossPercentage: 0, 
-                livePrice: liveGoldPriceSAR,
-                assetsCount: 0
-            });
-        }
+    db.query('SELECT * FROM Assets WHERE UserId = ? AND AssetType = "Gold"', [userId], (err, results) => {
+        if (err) return res.status(500).json({ error: 'Database error' });
 
-        let totalOunces = 0;
+        let totalGrams = 0;
         let totalCost = 0;
-        
+
         results.forEach(asset => {
-            // Ensure numbers are parsed correctly from MySQL Decimal strings
-            const weight = parseFloat(asset.WeightInOunces) || 0;
-            const price = parseFloat(asset.PurchasePricePerOunce) || 0;
+            // We assume stored weight is now treated as Grams for the new logic
+            const weight = parseFloat(asset.WeightInOunces) || 0; 
+            const pricePerGram = parseFloat(asset.PurchasePricePerOunce) || 0;
             
-            totalOunces += weight;
-            totalCost += (weight * price);
+            totalGrams += weight;
+            totalCost += (weight * pricePerGram);
         });
 
-        const currentValue = totalOunces * liveGoldPriceSAR;
+        const currentValue = totalGrams * livePricePerGramSAR;
         const profitLoss = currentValue - totalCost;
-        const profitLossPercentage = totalCost > 0 ? ((currentValue - totalCost) / totalCost) * 100 : 0;
 
-        const response = {
-            totalOunces: Number(totalOunces.toFixed(4)),
+        res.json({
+            totalGrams: Number(totalGrams.toFixed(2)),
             currentValue: Number(currentValue.toFixed(2)),
             totalCost: Number(totalCost.toFixed(2)),
             profitLoss: Number(profitLoss.toFixed(2)),
-            profitLossPercentage: Number(profitLossPercentage.toFixed(2)),
-            livePrice: Number(liveGoldPriceSAR.toFixed(2)),
-            assetsCount: results.length
-        };
-
-        console.log('✅ Data processed and sent back to mobile.');
-        res.json(response);
+            profitLossPercentage: totalCost > 0 ? Number(((profitLoss / totalCost) * 100).toFixed(2)) : 0,
+            livePriceSAR: Number(livePricePerGramSAR.toFixed(2)), // Price per Gram in SAR
+            items: results // Detailed list
+        });
     });
 });
 
