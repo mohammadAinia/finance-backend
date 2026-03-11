@@ -342,41 +342,43 @@ app.get('/api/auth/mobile-token', authenticateToken, (req, res) => {
 // ==========================================
 
 // 1. جلب جميع الأهداف للمستخدم
-app.get('/api/goals', authenticateToken, async (req, res) => {
-    try {
-        const [goals] = await db.execute(
-            'SELECT * FROM SavingsGoals WHERE UserId = ? ORDER BY CreatedAt DESC',
-            [req.user.id]
-        );
-        res.json(goals);
-    } catch (error) {
-        console.error('Error fetching goals:', error);
-        res.status(500).json({ error: 'فشل في جلب الأهداف' });
-    }
+app.get('/api/goals', authenticateToken, (req, res) => {
+    db.query(
+        'SELECT * FROM SavingsGoals WHERE UserId = ? ORDER BY CreatedAt DESC',
+        [req.user.id],
+        (err, goals) => {
+            if (err) {
+                console.error('Error fetching goals:', err);
+                return res.status(500).json({ error: 'فشل في جلب الأهداف' });
+            }
+            res.json(goals);
+        }
+    );
 });
 
 // 2. إضافة هدف جديد
-app.post('/api/goals', authenticateToken, async (req, res) => {
+app.post('/api/goals', authenticateToken, (req, res) => {
     const { GoalName, TargetAmount } = req.body;
     
     if (!GoalName || !TargetAmount) {
         return res.status(400).json({ error: 'اسم الهدف والمبلغ المستهدف مطلوبان' });
     }
 
-    try {
-        const [result] = await db.execute(
-            'INSERT INTO SavingsGoals (UserId, GoalName, TargetAmount, CurrentAmount) VALUES (?, ?, ?, 0)',
-            [req.user.id, GoalName, TargetAmount]
-        );
-        res.json({ success: true, message: 'تمت إضافة الهدف بنجاح', id: result.insertId });
-    } catch (error) {
-        console.error('Error adding goal:', error);
-        res.status(500).json({ error: 'فشل في إضافة الهدف' });
-    }
+    db.query(
+        'INSERT INTO SavingsGoals (UserId, GoalName, TargetAmount, CurrentAmount) VALUES (?, ?, ?, 0)',
+        [req.user.id, GoalName, TargetAmount],
+        (err, result) => {
+            if (err) {
+                console.error('Error adding goal:', err);
+                return res.status(500).json({ error: 'فشل في إضافة الهدف' });
+            }
+            res.json({ success: true, message: 'تمت إضافة الهدف بنجاح', id: result.insertId });
+        }
+    );
 });
 
 // 3. إضافة مبلغ لمدخرات الهدف (تحديث CurrentAmount)
-app.put('/api/goals/:id/add-funds', authenticateToken, async (req, res) => {
+app.put('/api/goals/:id/add-funds', authenticateToken, (req, res) => {
     const goalId = req.params.id;
     const { amountToAdd } = req.body;
 
@@ -384,42 +386,40 @@ app.put('/api/goals/:id/add-funds', authenticateToken, async (req, res) => {
         return res.status(400).json({ error: 'المبلغ المضاف يجب أن يكون أكبر من صفر' });
     }
 
-    try {
-        const [result] = await db.execute(
-            'UPDATE SavingsGoals SET CurrentAmount = CurrentAmount + ? WHERE Id = ? AND UserId = ?',
-            [amountToAdd, goalId, req.user.id]
-        );
-
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ error: 'الهدف غير موجود أو غير مصرح لك بتعديله' });
+    db.query(
+        'UPDATE SavingsGoals SET CurrentAmount = CurrentAmount + ? WHERE Id = ? AND UserId = ?',
+        [amountToAdd, goalId, req.user.id],
+        (err, result) => {
+            if (err) {
+                console.error('Error updating goal:', err);
+                return res.status(500).json({ error: 'فشل في تحديث الهدف' });
+            }
+            if (result.affectedRows === 0) {
+                return res.status(404).json({ error: 'الهدف غير موجود أو غير مصرح لك بتعديله' });
+            }
+            res.json({ success: true, message: 'تم تحديث المدخرات بنجاح' });
         }
-
-        res.json({ success: true, message: 'تم تحديث المدخرات بنجاح' });
-    } catch (error) {
-        console.error('Error updating goal:', error);
-        res.status(500).json({ error: 'فشل في تحديث الهدف' });
-    }
+    );
 });
 
 // 4. حذف هدف
-app.delete('/api/goals/:id', authenticateToken, async (req, res) => {
+app.delete('/api/goals/:id', authenticateToken, (req, res) => {
     const goalId = req.params.id;
 
-    try {
-        const [result] = await db.execute(
-            'DELETE FROM SavingsGoals WHERE Id = ? AND UserId = ?',
-            [goalId, req.user.id]
-        );
-
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ error: 'الهدف غير موجود أو غير مصرح لك بحذفه' });
+    db.query(
+        'DELETE FROM SavingsGoals WHERE Id = ? AND UserId = ?',
+        [goalId, req.user.id],
+        (err, result) => {
+            if (err) {
+                console.error('Error deleting goal:', err);
+                return res.status(500).json({ error: 'فشل في حذف الهدف' });
+            }
+            if (result.affectedRows === 0) {
+                return res.status(404).json({ error: 'الهدف غير موجود أو غير مصرح لك بحذفه' });
+            }
+            res.json({ success: true, message: 'تم حذف الهدف بنجاح' });
         }
-
-        res.json({ success: true, message: 'تم حذف الهدف بنجاح' });
-    } catch (error) {
-        console.error('Error deleting goal:', error);
-        res.status(500).json({ error: 'فشل في حذف الهدف' });
-    }
+    );
 });
 
 
