@@ -225,7 +225,30 @@ cron.schedule('0 */2 * * *', async () => {
         console.error('Cron Job Error:', error);
     }
 });
+// أضف هذا المسار في server.js لتجربة الإرسال اليدوي
+app.get('/api/test-notification', async (req, res) => {
+    const { Expo } = require('expo-server-sdk');
+    let expo = new Expo();
+    let messages = [];
 
+    messages.push({
+        to: 'ExponentPushToken[H9buiaICZx-H6o8R-OpXC-]', // التوكن الخاص بك
+        sound: 'default',
+        title: '🤖 اختبار سيرفر الذهب',
+        body: 'مرحباً من Render! إذا وصلك هذا، فالسيرفر متصل بجوالك بنجاح.',
+    });
+
+    try {
+        let chunks = expo.chunkPushNotifications(messages);
+        for (let chunk of chunks) {
+            await expo.sendPushNotificationsAsync(chunk);
+        }
+        res.json({ success: true, message: 'تم إرسال الإشعار من السيرفر!' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'فشل إرسال الإشعار' });
+    }
+});
 app.post('/api/auth/update-push-token', authenticateToken, (req, res) => {
     const userId = req.user.id;
     const { pushToken } = req.body;
