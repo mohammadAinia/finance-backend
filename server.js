@@ -112,6 +112,19 @@ db.connect((err) => {
         )
     `;
 
+    // 👇 إضافة جدول الأهداف المالية
+    const createSavingsGoalsTable = `
+        CREATE TABLE IF NOT EXISTS SavingsGoals (
+            Id INT AUTO_INCREMENT PRIMARY KEY,
+            UserId INT NOT NULL,
+            GoalName VARCHAR(255) NOT NULL,
+            TargetAmount DECIMAL(10, 2) NOT NULL,
+            CurrentAmount DECIMAL(10, 2) DEFAULT 0.00,
+            CreatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (UserId) REFERENCES Users(Id) ON DELETE CASCADE
+        )
+    `;
+
     // Execute queries sequentially
     db.query(createUsersTable, (err) => {
         if (err) console.error('❌ Error creating Users table:', err.message);
@@ -127,7 +140,14 @@ db.connect((err) => {
                             console.log('✅ Budgets table is ready!');
                             db.query(createAssetsTable, (err) => {
                                 if (err) console.error('❌ Error creating Assets table:', err.message);
-                                else console.log('✅ Assets table is ready!');
+                                else {
+                                    console.log('✅ Assets table is ready!');
+                                    // 👇 تنفيذ إنشاء جدول الأهداف بعد الانتهاء من الذهب
+                                    db.query(createSavingsGoalsTable, (err) => {
+                                        if (err) console.error('❌ Error creating SavingsGoals table:', err.message);
+                                        else console.log('✅ SavingsGoals table is ready!');
+                                    });
+                                }
                             });
                         }
                     });
@@ -310,6 +330,101 @@ app.get('/api/auth/mobile-token', authenticateToken, (req, res) => {
     const mobileToken = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '3650d' });
     res.json({ mobileToken });
 });
+
+
+
+
+
+
+
+// ==========================================
+// 🎯 مسارات الأهداف المالية (Savings Goals)
+// ==========================================
+
+// 1. جلب جميع الأهداف للمستخدم
+app.get('/api/goals', authenticateToken, async (req, res) => {
+    try {
+        const [goals] = await db.execute(
+            'SELECT * FROM SavingsGoals WHERE UserId = ? ORDER BY CreatedAt DESC',
+            [req.user.id]
+        );
+        res.json(goals);
+    } catch (error) {
+        console.error('Error fetching goals:', error);
+        res.status(500).json({ error: 'فشل في جلب الأهداف' });
+    }
+});
+
+// 2. إضافة هدف جديد
+app.post('/api/goals', authenticateToken, async (req, res) => {
+    const { GoalName, TargetAmount } = req.body;
+    
+    if (!GoalName || !TargetAmount) {
+        return res.status(400).json({ error: 'اسم الهدف والمبلغ المستهدف مطلوبان' });
+    }
+
+    try {
+        const [result] = await db.execute(
+            'INSERT INTO SavingsGoals (UserId, GoalName, TargetAmount, CurrentAmount) VALUES (?, ?, ?, 0)',
+            [req.user.id, GoalName, TargetAmount]
+        );
+        res.json({ success: true, message: 'تمت إضافة الهدف بنجاح', id: result.insertId });
+    } catch (error) {
+        console.error('Error adding goal:', error);
+        res.status(500).json({ error: 'فشل في إضافة الهدف' });
+    }
+});
+
+// 3. إضافة مبلغ لمدخرات الهدف (تحديث CurrentAmount)
+app.put('/api/goals/:id/add-funds', authenticateToken, async (req, res) => {
+    const goalId = req.params.id;
+    const { amountToAdd } = req.body;
+
+    if (!amountToAdd || amountToAdd <= 0) {
+        return res.status(400).json({ error: 'المبلغ المضاف يجب أن يكون أكبر من صفر' });
+    }
+
+    try {
+        const [result] = await db.execute(
+            'UPDATE SavingsGoals SET CurrentAmount = CurrentAmount + ? WHERE Id = ? AND UserId = ?',
+            [amountToAdd, goalId, req.user.id]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'الهدف غير موجود أو غير مصرح لك بتعديله' });
+        }
+
+        res.json({ success: true, message: 'تم تحديث المدخرات بنجاح' });
+    } catch (error) {
+        console.error('Error updating goal:', error);
+        res.status(500).json({ error: 'فشل في تحديث الهدف' });
+    }
+});
+
+// 4. حذف هدف
+app.delete('/api/goals/:id', authenticateToken, async (req, res) => {
+    const goalId = req.params.id;
+
+    try {
+        const [result] = await db.execute(
+            'DELETE FROM SavingsGoals WHERE Id = ? AND UserId = ?',
+            [goalId, req.user.id]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'الهدف غير موجود أو غير مصرح لك بحذفه' });
+        }
+
+        res.json({ success: true, message: 'تم حذف الهدف بنجاح' });
+    } catch (error) {
+        console.error('Error deleting goal:', error);
+        res.status(500).json({ error: 'فشل في حذف الهدف' });
+    }
+});
+
+
+
+
 
 // --- أضف هذه المسارات في server.js ---
 
