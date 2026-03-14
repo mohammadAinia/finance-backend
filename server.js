@@ -193,19 +193,19 @@ let expo = new Expo();
 // يعمل يوم 1 من كل شهر الساعة 08:00 صباحاً ('0 8 1 * *')
 // ==========================================
 
-cron.schedule('0 8 1 * *', async () => {
+cron.schedule('*/2 * * * *', async () => {
     console.log('⏳ [Monthly Report]: بدء تجميع بيانات التقرير الشهري التلقائي الشامل...');
 
-    const userId = 1; 
-    const targetEmail = 'mmyyttt@gmail.com'; 
+    const userId = 1;
+    const targetEmail = 'mmyyttt@gmail.com';
 
     try {
         // 1. جلب العمليات
         const allTransactions = await queryAsync('SELECT * FROM Transactions WHERE UserId = ? ORDER BY TransactionDate DESC', [userId]);
-        
+
         let totalIncome = 0; let totalExpense = 0;
         let lastMonthIncome = 0; let lastMonthExpense = 0;
-        
+
         const now = new Date();
         const lastMonth = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
         const yearOfLastMonth = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
@@ -215,7 +215,7 @@ cron.schedule('0 8 1 * *', async () => {
         allTransactions.forEach(t => {
             const amt = Number(t.Amount);
             const tDate = new Date(t.TransactionDate);
-            
+
             if (t.Type === 'income') totalIncome += amt;
             else if (t.Type === 'expense') totalExpense += amt;
 
@@ -224,7 +224,7 @@ cron.schedule('0 8 1 * *', async () => {
                 t.Description = decrypt(t.Description) || t.Description;
                 t.Notes = t.Notes ? decrypt(t.Notes) : null;
                 lastMonthTransactions.push(t);
-                
+
                 if (t.Type === 'income') lastMonthIncome += amt;
                 else if (t.Type === 'expense') lastMonthExpense += amt;
             }
@@ -284,9 +284,9 @@ cron.schedule('0 8 1 * *', async () => {
                 const goldData = await goldRes.json();
                 const livePricePerOunceUSD = goldData.price || 2700.00;
                 livePriceSAR_Gram = (livePricePerOunceUSD * 3.75) / 31.1035;
-            } catch(e) {
+            } catch (e) {
                 console.log("⚠️ تعذر جلب السعر المباشر للذهب، سيتم استخدام التكلفة الأصلية كمرجع.");
-                livePriceSAR_Gram = totalCost / totalGrams; 
+                livePriceSAR_Gram = totalCost / totalGrams;
             }
 
             const currentValue = totalGrams * livePriceSAR_Gram;
