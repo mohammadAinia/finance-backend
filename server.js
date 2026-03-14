@@ -5,10 +5,10 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 require('dotenv').config();
+const { Resend } = require('resend');
 const nodemailer = require('nodemailer');
 const html_to_pdf = require('html-pdf-node');
-const { Resend } = require('resend');
-const html_to_pdf = require('html-pdf-node');
+
 
 // تهيئة الخدمة باستخدام المفتاح
 const resend = new Resend(process.env.RESEND_API_KEY);
