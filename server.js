@@ -1410,12 +1410,17 @@ app.get('/api/advisor', authenticateToken, (req, res) => {
 // 📧 نظام إرسال التقارير التلقائي (المسار التجريبي)
 // ==========================================
 
-// 1. إعداد ناقل الإيميل (Transporter)
 const transporter = nodemailer.createTransport({
-    service: 'gmail',
+    host: 'smtp.gmail.com',
+    port: 465, // المنفذ الآمن لـ Gmail
+    secure: true, // استخدام SSL
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
+    },
+    // هذا الخيار يحل مشكلة الـ Timeout في بعض السيرفرات السحابية
+    tls: {
+        rejectUnauthorized: false
     }
 });
 
