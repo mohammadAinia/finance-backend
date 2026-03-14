@@ -7,7 +7,11 @@ const crypto = require('crypto');
 require('dotenv').config();
 const nodemailer = require('nodemailer');
 const html_to_pdf = require('html-pdf-node');
+const { Resend } = require('resend');
+const html_to_pdf = require('html-pdf-node');
 
+// تهيئة الخدمة باستخدام المفتاح
+const resend = new Resend(process.env.RESEND_API_KEY);
 const app = express();
 
 app.use(cors());
@@ -1424,68 +1428,68 @@ const transporter = nodemailer.createTransport({
     family: 4 // 👈 هذا السطر السحري يجبر السيرفر على استخدام IPv4 بدلاً من IPv6
 });
 
-// 2. مسار التجربة عبر المتصفح
+// ==========================================
+// 📧 نظام إرسال التقارير التلقائي (عبر واجهة Resend)
+// ==========================================
+
 app.get('/api/test-email-report', async (req, res) => {
-    // نأخذ الإيميل الهدف من الرابط
     const targetEmail = req.query.email; 
     
     if (!targetEmail) {
-        return res.status(400).send('<h2 dir="rtl" style="font-family: sans-serif; text-align: center; color: red;">❌ الرجاء تمرير الإيميل في الرابط مثل: <br><br> /api/test-email-report?email=test@example.com</h2>');
+        return res.status(400).send('<h2 dir="rtl" style="font-family: sans-serif; text-align: center; color: red;">❌ الرجاء تمرير الإيميل في الرابط</h2>');
     }
 
     try {
         console.log(`⏳ جاري تجهيز التقرير لإرساله إلى: ${targetEmail}...`);
 
-        // أ. تجهيز قالب HTML بسيط للتجربة (لاحقاً سنضع فيه نفس الكود الاحترافي الذي صنعناه للتطبيق)
         const htmlContent = `
             <!DOCTYPE html>
             <html dir="rtl" lang="ar">
                 <body style="font-family: Arial, sans-serif; text-align: center; padding: 40px; background-color: #f3f4f6;">
                     <div style="background: white; padding: 30px; border-radius: 12px; max-width: 600px; margin: auto; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
                         <h1 style="color: #1e3a8a;">تقرير مالي تجريبي 🚀</h1>
-                        <p style="color: #4b5563; font-size: 16px;">مرحباً! هذا التقرير تم توليده تلقائياً من الخادم (Server) الخاص بك.</p>
-                        
+                        <p style="color: #4b5563; font-size: 16px;">مرحباً! هذا التقرير تم توليده تلقائياً من الخادم عبر API.</p>
                         <div style="background: #10b981; color: white; padding: 20px; border-radius: 8px; margin-top: 30px;">
                             <h3 style="margin: 0 0 10px 0;">الرصيد المتاح (عينة)</h3>
                             <h2 style="margin: 0; font-size: 32px;">SAR 5,430.00</h2>
                         </div>
-                        
-                        <p style="color: #9ca3af; font-size: 12px; margin-top: 40px;">نظام الإدارة المالية الآلي © 2026</p>
                     </div>
                 </body>
             </html>
         `;
 
-        // ب. إعدادات تحويل الـ HTML إلى PDF
         let options = { format: 'A4', printBackground: true };
         let file = { content: htmlContent };
         
         console.log('📄 جاري توليد ملف PDF في الذاكرة...');
         const pdfBuffer = await html_to_pdf.generatePdf(file, options);
 
-        // ج. إعداد رسالة الإيميل ومرفق الـ PDF
-        const mailOptions = {
-            from: `"المستشار المالي 🤖" <${process.env.EMAIL_USER}>`,
+        console.log('📧 جاري إرسال الإيميل عبر Resend...');
+        
+        // استخدام Resend لإرسال الإيميل مع المرفق
+        const { data, error } = await resend.emails.send({
+            from: 'Finance App <onboarding@resend.dev>', // إيميل الاختبار الافتراضي من Resend
             to: targetEmail,
-            subject: '📊 تقريرك المالي الشامل (تجربة من السيرفر)',
-            text: 'مرحباً، تجد في المرفقات التقرير المالي الشامل الخاص بك بصيغة PDF.',
+            subject: '📊 تقريرك المالي الشامل',
+            html: '<p dir="rtl">مرحباً، تجد في المرفقات التقرير المالي الشامل الخاص بك بصيغة PDF.</p>',
             attachments: [
                 {
-                    filename: 'Financial_Report_Test.pdf',
-                    content: pdfBuffer,
-                    contentType: 'application/pdf'
+                    filename: 'Financial_Report.pdf',
+                    content: pdfBuffer, // نمرر الـ Buffer مباشرة
                 }
             ]
-        };
+        });
 
-        console.log('📧 جاري إرسال الإيميل...');
-        await transporter.sendMail(mailOptions);
+        if (error) {
+            console.error('❌ خطأ من خدمة Resend:', error);
+            return res.status(500).send(`<h2 dir="rtl" style="font-family: sans-serif; text-align: center; color: red;">❌ خطأ في الإرسال: ${error.message}</h2>`);
+        }
 
-        console.log('✅ اكتملت العملية بنجاح!');
+        console.log('✅ تم الإرسال بنجاح! رقم العملية:', data.id);
         res.send(`<h2 dir="rtl" style="font-family: sans-serif; text-align: center; color: green;">✅ تم توليد الـ PDF وإرساله بنجاح إلى: <br><br> ${targetEmail}</h2>`);
 
     } catch (error) {
-        console.error('❌ خطأ أثناء العملية:', error);
+        console.error('❌ خطأ داخلي:', error);
         res.status(500).send(`<h2 dir="rtl" style="font-family: sans-serif; text-align: center; color: red;">❌ حدث خطأ: ${error.message}</h2>`);
     }
 });
