@@ -193,7 +193,7 @@ let expo = new Expo();
 // يعمل يوم 1 من كل شهر الساعة 08:00 صباحاً ('0 8 1 * *')
 // ==========================================
 
-cron.schedule('*/2 * * * *', async () => {
+cron.schedule('0 8 1 * *', async () => {
     console.log('⏳ [Monthly Report]: بدء تجميع بيانات التقرير الشهري التلقائي الشامل...');
 
     const userId = 1; 
@@ -263,7 +263,7 @@ cron.schedule('*/2 * * * *', async () => {
         }
 
         // 3. جلب بيانات الذهب
-        const goldAssetsQuery = await queryAsync('SELECT * FROM Assets WHERE UserId = ? AND AssetType = "Gold"', [userId]);
+        const goldAssetsQuery = await queryAsync("SELECT * FROM Assets WHERE UserId = ? AND AssetType = 'Gold'", [userId]);
         let goldAsset = null;
         if (goldAssetsQuery.length > 0) {
             let totalGrams = 0;
