@@ -1723,6 +1723,96 @@ app.get('/api/advisor', authenticateToken, (req, res) => {
     });
 });
 
+// ==========================================
+// 💬 المساعد المالي الذكي (Chatbot)
+// ==========================================
+app.post('/api/chat', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
+    const { message } = req.body;
+
+    if (!message) return res.status(400).json({ error: 'الرسالة مطلوبة' });
+
+    try {
+        // 1. تجميع بيانات المستخدم لإنشاء "الوعي المالي" للبوت
+        const currentMonth = new Date().getMonth() + 1;
+        const currentYear = new Date().getFullYear();
+
+        // جلب العمليات، الميزانيات، الأهداف، والذهب
+        const allTransactions = await queryAsync('SELECT * FROM Transactions WHERE UserId = ?', [userId]);
+        const budgets = await queryAsync('SELECT * FROM Budgets WHERE UserId = ?', [userId]);
+        const goals = await queryAsync('SELECT * FROM SavingsGoals WHERE UserId = ?', [userId]);
+        const goldAssets = await queryAsync('SELECT * FROM Assets WHERE UserId = ? AND AssetType = "Gold"', [userId]);
+
+        // حساب الرصيد الكلي ومصروفات الشهر الحالي حسب التصنيف
+        let totalBalance = 0;
+        let currentMonthExpense = 0;
+        const expensesByCategory = {};
+
+        allTransactions.forEach(t => {
+            const amt = Number(t.Amount);
+            const tDate = new Date(t.TransactionDate);
+            
+            if (t.Type === 'income') totalBalance += amt;
+            else if (t.Type === 'expense') {
+                totalBalance -= amt;
+                // إذا كانت العملية في هذا الشهر، أضفها لتفاصيل المصروفات
+                if (tDate.getMonth() + 1 === currentMonth && tDate.getFullYear() === currentYear) {
+                    currentMonthExpense += amt;
+                    expensesByCategory[t.Category] = (expensesByCategory[t.Category] || 0) + amt;
+                }
+            }
+        });
+
+        // حساب وزن الذهب الكلي
+        let totalGoldGrams = 0;
+        goldAssets.forEach(g => {
+            totalGoldGrams += parseFloat(g.WeightInOunces) || 0;
+        });
+
+        // 2. صياغة السياق المالي (البيانات التي سيفهمها البوت)
+        const financialContext = `
+        معلومات المستخدم المالية الحالية:
+        - الرصيد الإجمالي المتاح في المحفظة: ${totalBalance.toFixed(2)} ريال.
+        - إجمالي ما تم صرفه هذا الشهر: ${currentMonthExpense.toFixed(2)} ريال.
+        - تفصيل ما تم صرفه هذا الشهر حسب الأقسام: ${JSON.stringify(expensesByCategory)}.
+        - ميزانيات المستخدم (الحد الأقصى للصرف لكل قسم): ${JSON.stringify(budgets.map(b => ({ القسم: b.Category, الحد: b.AmountLimit }))) }.
+        - أهداف المستخدم للادخار: ${JSON.stringify(goals.map(g => ({ الهدف: g.GoalName, المستهدف: g.TargetAmount, المجمع_حاليا: g.CurrentAmount }))) }.
+        - الأصول: يمتلك المستخدم ${totalGoldGrams.toFixed(2)} جرام من الذهب.
+        `;
+
+        // 3. صياغة القواعد الصارمة (System Prompt)
+        const systemPrompt = `أنت مساعد مالي ذكي وخبير داخل تطبيق سعودي لإدارة المصاريف الشخصية.
+        
+        القواعد الصارمة جداً:
+        1. الإطار المالي فقط: يجب أن تنحصر إجاباتك في الإدارة المالية، الميزانية، الإدخار، والمصاريف. إذا سألك المستخدم عن (الطقس، التاريخ، السياسة، البرمجة، معلومات عامة، أو أي شيء خارج المال)، يجب أن تعتذر بلباقة وتقول: "عذراً، أنا مبرمج حصرياً كمستشار مالي لمساعدتك في ميزانيتك ومصاريفك فقط."
+        2. الإجابة المبنية على البيانات: إذا سألك "هل أستطيع شراء كذا بقيمة كذا؟"، يجب أن تقارن القيمة برصيده الإجمالي، وتتحقق من ميزانيته لهذا الشهر. أعطه نصيحة واقعية (مثلاً: نعم تستطيع، لكنك ستتجاوز ميزانية التسوق، أو لا أنصحك لأن رصيدك لا يكفي).
+        3. تحدث باللغة العربية، بأسلوب ودي واحترافي، وتجنب ذكر الأرقام كأكواد برمجية، بل اكتبها كأرقام عادية.
+        4. كن مختصراً في إجابتك ولا تكتب فقرات طويلة جداً.
+        
+        ${financialContext}
+        `;
+
+        // 4. الاتصال بمحرك Groq
+        const Groq = require('groq-sdk');
+        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+        const chatCompletion = await groq.chat.completions.create({
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: message }
+            ],
+            model: 'llama-3.3-70b-versatile',
+            temperature: 0.3, // رقم منخفض ليجعله دقيقاً وملتزماً بالقواعد
+        });
+
+        const reply = chatCompletion.choices[0].message.content.trim();
+        res.json({ reply });
+
+    } catch (error) {
+        console.error('❌ Chatbot Error:', error);
+        res.status(500).json({ error: 'حدث خطأ في معالجة رسالتك' });
+    }
+});
 
 // ==========================================
 // 📧 نظام إرسال التقارير التلقائي (المسار التجريبي)
