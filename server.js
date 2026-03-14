@@ -1741,7 +1741,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
         const allTransactions = await queryAsync('SELECT * FROM Transactions WHERE UserId = ?', [userId]);
         const budgets = await queryAsync('SELECT * FROM Budgets WHERE UserId = ?', [userId]);
         const goals = await queryAsync('SELECT * FROM SavingsGoals WHERE UserId = ?', [userId]);
-        const goldAssets = await queryAsync('SELECT * FROM Assets WHERE UserId = ? AND AssetType = "Gold"', [userId]);
+        const goldAssets = await queryAsync("SELECT * FROM Assets WHERE UserId = ? AND AssetType = 'Gold'", [userId]);
 
         // حساب الرصيد الكلي ومصروفات الشهر الحالي حسب التصنيف
         let totalBalance = 0;
