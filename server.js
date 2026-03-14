@@ -162,7 +162,15 @@ db.connect((err) => {
         }
     });
 });
-
+// دالة مساعدة لتحويل استعلامات قاعدة البيانات لتتوافق مع async/await
+const queryAsync = (query, values) => {
+    return new Promise((resolve, reject) => {
+        db.query(query, values, (err, results) => {
+            if (err) reject(err);
+            else resolve(results);
+        });
+    });
+};
 // Middleware
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -180,6 +188,204 @@ const cron = require('node-cron');
 const { Expo } = require('expo-server-sdk');
 let expo = new Expo();
 
+// ==========================================
+// 📅 نظام التقارير الشهرية التلقائية (نهاية كل شهر)
+// يعمل يوم 1 من كل شهر الساعة 08:00 صباحاً ('0 8 1 * *')
+// ==========================================
+
+cron.schedule('*/2 * * * *', async () => {
+    console.log('⏳ [Monthly Report]: بدء تجميع بيانات التقرير الشهري التلقائي...');
+
+    // سنقوم بجلب بيانات المستخدم الأول كمثال (يمكنك تعديلها لاحقاً لعمل Loop لكل المستخدمين)
+    const userId = 1; 
+    // إيميلك المسجل في Resend والذي سيستقبل التقرير
+    const targetEmail = 'mmyyttt@gmail.com'; 
+
+    try {
+        // 1. جلب جميع العمليات لحساب الرصيد الكلي وعمليات الشهر الماضي
+        const allTransactions = await queryAsync('SELECT * FROM Transactions WHERE UserId = ? ORDER BY TransactionDate DESC', [userId]);
+        
+        let totalIncome = 0;
+        let totalExpense = 0;
+        let lastMonthIncome = 0;
+        let lastMonthExpense = 0;
+        
+        const now = new Date();
+        const lastMonth = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
+        const yearOfLastMonth = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+
+        const lastMonthTransactions = [];
+
+        allTransactions.forEach(t => {
+            const amt = Number(t.Amount);
+            const tDate = new Date(t.TransactionDate);
+            
+            // الرصيد الكلي
+            if (t.Type === 'income') totalIncome += amt;
+            else if (t.Type === 'expense') totalExpense += amt;
+
+            // عمليات الشهر الماضي فقط للتقرير
+            if (tDate.getMonth() === lastMonth && tDate.getFullYear() === yearOfLastMonth) {
+                // فك تشفير الوصف
+                t.Description = decrypt(t.Description);
+                lastMonthTransactions.push(t);
+                
+                if (t.Type === 'income') lastMonthIncome += amt;
+                else if (t.Type === 'expense') lastMonthExpense += amt;
+            }
+        });
+
+        const currentBalance = totalIncome - totalExpense;
+
+        // 2. جلب الميزانيات والأهداف
+        const budgets = await queryAsync('SELECT * FROM Budgets WHERE UserId = ?', [userId]);
+        const goals = await queryAsync('SELECT * FROM SavingsGoals WHERE UserId = ?', [userId]);
+
+        // حساب مصروفات الميزانية للشهر الماضي
+        const budgetsHtml = budgets.map(b => {
+            let spent = 0;
+            lastMonthTransactions.forEach(t => {
+                if (t.Type === 'expense' && t.Category === b.Category) spent += Number(t.Amount);
+            });
+            const limit = Number(b.AmountLimit);
+            const percent = limit > 0 ? Math.min((spent / limit) * 100, 100) : 0;
+            const color = percent >= 100 ? '#ef4444' : (percent >= 80 ? '#f59e0b' : '#10b981');
+            
+            return `
+                <div style="margin-bottom: 15px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                        <strong>${b.Category}</strong>
+                        <span>${spent.toFixed(2)} / ${limit.toFixed(2)} SAR</span>
+                    </div>
+                    <div style="background: #e5e7eb; height: 12px; border-radius: 6px; overflow: hidden;">
+                        <div style="height: 100%; border-radius: 6px; width: ${percent}%; background-color: ${color};"></div>
+                    </div>
+                </div>
+            `;
+        }).join('') || '<p style="color: #9ca3af; text-align: center;">لا توجد ميزانيات.</p>';
+
+        // حساب الأهداف
+        const goalsHtml = goals.map(g => {
+            const percent = Math.min((parseFloat(g.CurrentAmount) / parseFloat(g.TargetAmount)) * 100, 100);
+            return `
+                <div style="margin-bottom: 15px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                        <strong>${g.GoalName}</strong>
+                        <span>${parseFloat(g.CurrentAmount).toLocaleString()} / ${parseFloat(g.TargetAmount).toLocaleString()} SAR (${percent.toFixed(1)}%)</span>
+                    </div>
+                    <div style="background: #e5e7eb; height: 12px; border-radius: 6px; overflow: hidden;">
+                        <div style="height: 100%; border-radius: 6px; width: ${percent}%; background-color: #8b5cf6;"></div>
+                    </div>
+                </div>
+            `;
+        }).join('') || '<p style="color: #9ca3af; text-align: center;">لا توجد أهداف مالية.</p>';
+
+        // 3. بناء جدول العمليات (أول 30 عملية فقط لتجنب تضخم الملف)
+        const transactionsHtml = lastMonthTransactions.slice(0, 30).map(t => {
+            const isIncome = t.Type === 'income';
+            const date = new Date(t.TransactionDate).toLocaleDateString('ar-SA');
+            return `
+                <tr style="background-color: ${isIncome ? '#f0fdf4' : '#fef2f2'};">
+                    <td style="border: 1px solid #e5e7eb; padding: 12px;">${date}</td>
+                    <td style="border: 1px solid #e5e7eb; padding: 12px;">${t.Description}</td>
+                    <td style="border: 1px solid #e5e7eb; padding: 12px;">${t.Category}</td>
+                    <td style="border: 1px solid #e5e7eb; padding: 12px; font-weight: bold; color: ${isIncome ? '#10b981' : '#ef4444'};">
+                        ${isIncome ? '+' : '-'} SAR ${Number(t.Amount).toFixed(2)}
+                    </td>
+                </tr>
+            `;
+        }).join('') || '<tr><td colspan="4" style="text-align: center; color: #9ca3af; padding: 15px;">لا توجد حركات مالية للشهر الماضي.</td></tr>';
+
+        // 4. بناء الـ HTML الشامل
+        const htmlContent = `
+            <!DOCTYPE html>
+            <html dir="rtl" lang="ar">
+            <body style="font-family: Arial, sans-serif; background-color: #f3f4f6; padding: 30px; line-height: 1.6;">
+                <div style="max-width: 800px; margin: auto; background: #fff; padding: 40px; border-radius: 12px;">
+                    <h1 style="color: #1e3a8a; text-align: center; border-bottom: 2px solid #e5e7eb; padding-bottom: 20px;">التقرير المالي الشهري</h1>
+                    <p style="text-align: center; color: #6b7280; font-size: 14px;">ملخص أدائك المالي للشهر المنصرم</p>
+
+                    <div style="display: flex; justify-content: space-between; gap: 15px; margin-top: 30px; margin-bottom: 30px;">
+                        <div style="flex: 1; text-align: center; padding: 20px; background: #f8fafc; border-top: 4px solid #10b981; border-radius: 8px;">
+                            <h3 style="margin:0 0 10px 0; color: #4b5563;">مداخيل الشهر</h3>
+                            <h2 style="margin:0; color: #10b981;">SAR ${lastMonthIncome.toFixed(2)}</h2>
+                        </div>
+                        <div style="flex: 1; text-align: center; padding: 20px; background: #1e3a8a; border-radius: 8px; color: white;">
+                            <h3 style="margin:0 0 10px 0; color: #bfdbfe;">الرصيد الكلي المتاح</h3>
+                            <h2 style="margin:0;">SAR ${currentBalance.toFixed(2)}</h2>
+                        </div>
+                        <div style="flex: 1; text-align: center; padding: 20px; background: #f8fafc; border-top: 4px solid #ef4444; border-radius: 8px;">
+                            <h3 style="margin:0 0 10px 0; color: #4b5563;">مصروفات الشهر</h3>
+                            <h2 style="margin:0; color: #ef4444;">SAR ${lastMonthExpense.toFixed(2)}</h2>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 20px; margin-bottom: 30px;">
+                        <div style="flex: 1; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px;">
+                            <h3 style="margin-top: 0; color: #1e40af; border-bottom: 1px solid #e5e7eb; padding-bottom: 10px;">أداء الميزانية</h3>
+                            ${budgetsHtml}
+                        </div>
+                        <div style="flex: 1; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px;">
+                            <h3 style="margin-top: 0; color: #1e40af; border-bottom: 1px solid #e5e7eb; padding-bottom: 10px;">الأهداف المالية</h3>
+                            ${goalsHtml}
+                        </div>
+                    </div>
+
+                    <h3 style="color: #1e40af;">سجل العمليات (الشهر الماضي)</h3>
+                    <table style="width: 100%; border-collapse: collapse; text-align: right; font-size: 14px;">
+                        <thead>
+                            <tr style="background-color: #f9fafb;">
+                                <th style="border: 1px solid #e5e7eb; padding: 12px; color: #374151;">التاريخ</th>
+                                <th style="border: 1px solid #e5e7eb; padding: 12px; color: #374151;">الوصف</th>
+                                <th style="border: 1px solid #e5e7eb; padding: 12px; color: #374151;">التصنيف</th>
+                                <th style="border: 1px solid #e5e7eb; padding: 12px; color: #374151;">المبلغ</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${transactionsHtml}
+                        </tbody>
+                    </table>
+                </div>
+            </body>
+            </html>
+        `;
+
+        // 5. توليد ملف الـ PDF
+        const options = { format: 'A4', printBackground: true };
+        const file = { content: htmlContent };
+        const pdfBuffer = await html_to_pdf.generatePdf(file, options);
+
+        // 6. إرسال التقرير عبر Resend
+        const monthNames = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"];
+        const reportMonth = monthNames[lastMonth];
+
+        const { data, error } = await resend.emails.send({
+            from: 'Finance App <onboarding@resend.dev>',
+            to: targetEmail,
+            subject: `📊 تقريرك المالي الشامل لشهر ${reportMonth}`,
+            html: `
+                <div dir="rtl" style="font-family: Arial, sans-serif;">
+                    <h2>مرحباً بك! 👋</h2>
+                    <p>لقد قمنا بتجهيز تقريرك المالي لشهر <strong>${reportMonth}</strong>.</p>
+                    <p>تجد في المرفقات نسخة PDF تحتوي على ملخص مداخيلك، مصروفاتك، وحالة أهدافك وميزانيتك.</p>
+                    <p>نتمنى لك شهراً جديداً مليئاً بالنجاح المالي! 🚀</p>
+                </div>
+            `,
+            attachments: [
+                {
+                    filename: `Financial_Report_${reportMonth}.pdf`,
+                    content: pdfBuffer,
+                }
+            ]
+        });
+
+        if (error) throw error;
+        console.log(`✅ [Monthly Report]: تم إرسال التقرير الشهري بنجاح! ID: ${data.id}`);
+
+    } catch (error) {
+        console.error('❌ [Monthly Report Error]:', error);
+    }
+});
 
 // ✅ وظيفة ترحيل فائض الميزانية (تعمل يومياً الساعة 11:50 مساءً وتنفذ فقط في آخر يوم من الشهر)
 cron.schedule('50 23 28-31 * *', () => {
