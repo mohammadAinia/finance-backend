@@ -189,27 +189,23 @@ const { Expo } = require('expo-server-sdk');
 let expo = new Expo();
 
 // ==========================================
-// 📅 نظام التقارير الشهرية التلقائية (نهاية كل شهر)
+// 📅 نظام التقارير الشهرية التلقائية (نهاية كل شهر) - النسخة الشاملة (Premium)
 // يعمل يوم 1 من كل شهر الساعة 08:00 صباحاً ('0 8 1 * *')
 // ==========================================
 
-cron.schedule('0 8 1 * *', async () => {
-    console.log('⏳ [Monthly Report]: بدء تجميع بيانات التقرير الشهري التلقائي...');
+cron.schedule('*/2 * * * *', async () => {
+    console.log('⏳ [Monthly Report]: بدء تجميع بيانات التقرير الشهري التلقائي الشامل...');
 
-    // سنقوم بجلب بيانات المستخدم الأول كمثال (يمكنك تعديلها لاحقاً لعمل Loop لكل المستخدمين)
-    const userId = 1;
-    // إيميلك المسجل في Resend والذي سيستقبل التقرير
-    const targetEmail = 'mmyyttt@gmail.com';
+    const userId = 1; 
+    const targetEmail = 'mmyyttt@gmail.com'; 
 
     try {
-        // 1. جلب جميع العمليات لحساب الرصيد الكلي وعمليات الشهر الماضي
+        // 1. جلب العمليات
         const allTransactions = await queryAsync('SELECT * FROM Transactions WHERE UserId = ? ORDER BY TransactionDate DESC', [userId]);
-
-        let totalIncome = 0;
-        let totalExpense = 0;
-        let lastMonthIncome = 0;
-        let lastMonthExpense = 0;
-
+        
+        let totalIncome = 0; let totalExpense = 0;
+        let lastMonthIncome = 0; let lastMonthExpense = 0;
+        
         const now = new Date();
         const lastMonth = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
         const yearOfLastMonth = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
@@ -219,17 +215,16 @@ cron.schedule('0 8 1 * *', async () => {
         allTransactions.forEach(t => {
             const amt = Number(t.Amount);
             const tDate = new Date(t.TransactionDate);
-
-            // الرصيد الكلي
+            
             if (t.Type === 'income') totalIncome += amt;
             else if (t.Type === 'expense') totalExpense += amt;
 
-            // عمليات الشهر الماضي فقط للتقرير
             if (tDate.getMonth() === lastMonth && tDate.getFullYear() === yearOfLastMonth) {
-                // فك تشفير الوصف
-                t.Description = decrypt(t.Description);
+                // فك تشفير الوصف هنا
+                t.Description = decrypt(t.Description) || t.Description;
+                t.Notes = t.Notes ? decrypt(t.Notes) : null;
                 lastMonthTransactions.push(t);
-
+                
                 if (t.Type === 'income') lastMonthIncome += amt;
                 else if (t.Type === 'expense') lastMonthExpense += amt;
             }
@@ -237,11 +232,77 @@ cron.schedule('0 8 1 * *', async () => {
 
         const currentBalance = totalIncome - totalExpense;
 
-        // 2. جلب الميزانيات والأهداف
+        // 2. إعداد بيانات المخطط الدائري (Pie Chart) لمصروفات الشهر الماضي
+        const categoryTotals = {};
+        lastMonthTransactions.forEach(t => {
+            if (t.Type === 'expense') {
+                categoryTotals[t.Category] = (categoryTotals[t.Category] || 0) + Number(t.Amount);
+            }
+        });
+        const colors = ['#ef4444', '#f59e0b', '#3b82f6', '#10b981', '#8b5cf6', '#ec4899'];
+        let chartImageUrl = '';
+        const keys = Object.keys(categoryTotals);
+        if (keys.length > 0) {
+            const chartData = keys.map((key, index) => ({
+                name: key,
+                amount: categoryTotals[key],
+                color: colors[index % colors.length]
+            }));
+            const chartConfig = {
+                type: 'pie',
+                data: {
+                    labels: chartData.map(d => d.name),
+                    datasets: [{
+                        data: chartData.map(d => Number(d.amount)),
+                        backgroundColor: chartData.map(d => d.color)
+                    }]
+                },
+                options: { plugins: { legend: { position: 'right', labels: { font: { family: 'sans-serif' } } } } }
+            };
+            chartImageUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(chartConfig))}&w=400&h=250`;
+        }
+
+        // 3. جلب بيانات الذهب
+        const goldAssetsQuery = await queryAsync('SELECT * FROM Assets WHERE UserId = ? AND AssetType = "Gold"', [userId]);
+        let goldAsset = null;
+        if (goldAssetsQuery.length > 0) {
+            let totalGrams = 0;
+            let totalCost = 0;
+            goldAssetsQuery.forEach(asset => {
+                const weight = parseFloat(asset.WeightInOunces) || 0;
+                const pricePerGram = parseFloat(asset.PurchasePricePerOunce) || 0;
+                totalGrams += weight;
+                totalCost += (weight * pricePerGram);
+            });
+
+            // جلب السعر المباشر (أو استخدام السعر التقريبي في حال فشل الـ API)
+            let livePriceSAR_Gram = 0;
+            try {
+                const goldRes = await fetch('https://www.goldapi.io/api/XAU/USD', {
+                    headers: { 'x-access-token': process.env.GOLD_API_KEY || '' }
+                });
+                const goldData = await goldRes.json();
+                const livePricePerOunceUSD = goldData.price || 2700.00;
+                livePriceSAR_Gram = (livePricePerOunceUSD * 3.75) / 31.1035;
+            } catch(e) {
+                console.log("⚠️ تعذر جلب السعر المباشر للذهب، سيتم استخدام التكلفة الأصلية كمرجع.");
+                livePriceSAR_Gram = totalCost / totalGrams; 
+            }
+
+            const currentValue = totalGrams * livePriceSAR_Gram;
+            const profitLoss = currentValue - totalCost;
+            goldAsset = {
+                totalGrams: Number(totalGrams.toFixed(2)),
+                currentValue: Number(currentValue.toFixed(2)),
+                profitLoss: Number(profitLoss.toFixed(2)),
+                profitLossPercentage: totalCost > 0 ? Number(((profitLoss / totalCost) * 100).toFixed(2)) : 0
+            };
+        }
+
+        // 4. جلب الميزانيات والأهداف وتجهيز الـ HTML لها
         const budgets = await queryAsync('SELECT * FROM Budgets WHERE UserId = ?', [userId]);
         const goals = await queryAsync('SELECT * FROM SavingsGoals WHERE UserId = ?', [userId]);
 
-        // حساب مصروفات الميزانية للشهر الماضي
         const budgetsHtml = budgets.map(b => {
             let spent = 0;
             lastMonthTransactions.forEach(t => {
@@ -250,95 +311,149 @@ cron.schedule('0 8 1 * *', async () => {
             const limit = Number(b.AmountLimit);
             const percent = limit > 0 ? Math.min((spent / limit) * 100, 100) : 0;
             const color = percent >= 100 ? '#ef4444' : (percent >= 80 ? '#f59e0b' : '#10b981');
-
             return `
-                <div style="margin-bottom: 15px;">
+                <div class="progress-item">
                     <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
                         <strong>${b.Category}</strong>
                         <span>${spent.toFixed(2)} / ${limit.toFixed(2)} SAR</span>
                     </div>
-                    <div style="background: #e5e7eb; height: 12px; border-radius: 6px; overflow: hidden;">
-                        <div style="height: 100%; border-radius: 6px; width: ${percent}%; background-color: ${color};"></div>
+                    <div class="progress-bg">
+                        <div class="progress-fill" style="width: ${percent}%; background-color: ${color};"></div>
                     </div>
                 </div>
             `;
-        }).join('') || '<p style="color: #9ca3af; text-align: center;">لا توجد ميزانيات.</p>';
+        }).join('') || '<p class="text-center text-muted">لا توجد ميزانيات.</p>';
 
-        // حساب الأهداف
         const goalsHtml = goals.map(g => {
             const percent = Math.min((parseFloat(g.CurrentAmount) / parseFloat(g.TargetAmount)) * 100, 100);
             return `
-                <div style="margin-bottom: 15px;">
+                <div class="progress-item">
                     <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
                         <strong>${g.GoalName}</strong>
                         <span>${parseFloat(g.CurrentAmount).toLocaleString()} / ${parseFloat(g.TargetAmount).toLocaleString()} SAR (${percent.toFixed(1)}%)</span>
                     </div>
-                    <div style="background: #e5e7eb; height: 12px; border-radius: 6px; overflow: hidden;">
-                        <div style="height: 100%; border-radius: 6px; width: ${percent}%; background-color: #8b5cf6;"></div>
+                    <div class="progress-bg">
+                        <div class="progress-fill" style="width: ${percent}%; background-color: #8b5cf6;"></div>
                     </div>
                 </div>
             `;
-        }).join('') || '<p style="color: #9ca3af; text-align: center;">لا توجد أهداف مالية.</p>';
+        }).join('') || '<p class="text-center text-muted">لا توجد أهداف.</p>';
 
-        // 3. بناء جدول العمليات (أول 30 عملية فقط لتجنب تضخم الملف)
         const transactionsHtml = lastMonthTransactions.slice(0, 30).map(t => {
             const isIncome = t.Type === 'income';
             const date = new Date(t.TransactionDate).toLocaleDateString('ar-SA');
             return `
-                <tr style="background-color: ${isIncome ? '#f0fdf4' : '#fef2f2'};">
-                    <td style="border: 1px solid #e5e7eb; padding: 12px;">${date}</td>
-                    <td style="border: 1px solid #e5e7eb; padding: 12px;">${t.Description}</td>
-                    <td style="border: 1px solid #e5e7eb; padding: 12px;">${t.Category}</td>
-                    <td style="border: 1px solid #e5e7eb; padding: 12px; font-weight: bold; color: ${isIncome ? '#10b981' : '#ef4444'};">
+                <tr>
+                    <td>${date}</td>
+                    <td>${t.Description}</td>
+                    <td>${t.Category} / ${t.SubCategory || 'عام'}</td>
+                    <td class="${isIncome ? 'text-green' : 'text-red'}">
                         ${isIncome ? '+' : '-'} SAR ${Number(t.Amount).toFixed(2)}
                     </td>
                 </tr>
             `;
-        }).join('') || '<tr><td colspan="4" style="text-align: center; color: #9ca3af; padding: 15px;">لا توجد حركات مالية للشهر الماضي.</td></tr>';
+        }).join('') || '<tr><td colspan="4" class="text-center text-muted">لا توجد حركات مالية مسجلة للشهر الماضي.</td></tr>';
 
-        // 4. بناء الـ HTML الشامل
+        // 5. بناء الـ HTML الشامل والأنيق (نفس الداشبورد تماماً)
         const htmlContent = `
             <!DOCTYPE html>
             <html dir="rtl" lang="ar">
-            <body style="font-family: Arial, sans-serif; background-color: #f3f4f6; padding: 30px; line-height: 1.6;">
-                <div style="max-width: 800px; margin: auto; background: #fff; padding: 40px; border-radius: 12px;">
-                    <h1 style="color: #1e3a8a; text-align: center; border-bottom: 2px solid #e5e7eb; padding-bottom: 20px;">التقرير المالي الشهري</h1>
-                    <p style="text-align: center; color: #6b7280; font-size: 14px;">ملخص أدائك المالي للشهر المنصرم</p>
+            <head>
+                <meta charset="UTF-8">
+                <style>
+                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f3f4f6; color: #1f2937; margin: 0; padding: 30px; line-height: 1.6; }
+                    .container { max-width: 900px; margin: auto; background: #fff; padding: 40px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+                    .header-section { text-align: center; padding-bottom: 20px; border-bottom: 2px solid #e5e7eb; margin-bottom: 30px; }
+                    h1 { color: #1e3a8a; margin: 0 0 10px 0; font-size: 28px; }
+                    .report-date { color: #6b7280; font-size: 14px; }
+                    .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 40px; }
+                    .kpi-card { padding: 20px; border-radius: 10px; text-align: center; background: #f8fafc; border: 1px solid #e2e8f0; }
+                    .kpi-card h3 { margin: 0 0 10px 0; font-size: 16px; color: #4b5563; }
+                    .kpi-card p { margin: 0; font-size: 24px; font-weight: bold; }
+                    .card-balance { background: #1e3a8a; color: white; border: none; }
+                    .card-balance h3 { color: #bfdbfe; }
+                    .card-income { border-top: 4px solid #10b981; }
+                    .card-expense { border-top: 4px solid #ef4444; }
+                    h2 { color: #1e40af; border-bottom: 2px solid #bfdbfe; padding-bottom: 8px; margin-top: 40px; font-size: 20px; }
+                    .middle-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 40px; }
+                    .chart-container { text-align: center; border: 1px solid #e5e7eb; border-radius: 10px; padding: 20px; background: #fff; }
+                    .gold-card { background: linear-gradient(135deg, #b45309 0%, #d97706 100%); color: white; padding: 25px; border-radius: 10px; text-align: center; }
+                    .gold-card h3 { margin: 0 0 15px 0; color: #fef3c7; }
+                    .gold-value { font-size: 30px; font-weight: bold; margin: 10px 0; }
+                    table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 14px; }
+                    th, td { border: 1px solid #e5e7eb; padding: 12px; text-align: right; }
+                    th { background-color: #f9fafb; color: #374151; font-weight: bold; }
+                    tr:nth-child(even) { background-color: #f9fafb; }
+                    .text-green { color: #10b981; font-weight: bold; }
+                    .text-red { color: #ef4444; font-weight: bold; }
+                    .text-muted { color: #9ca3af; }
+                    .text-center { text-align: center; }
+                    .progress-item { margin-bottom: 15px; }
+                    .progress-bg { background: #e5e7eb; height: 12px; border-radius: 6px; overflow: hidden; }
+                    .progress-fill { height: 100%; border-radius: 6px; }
+                    .page-break-avoid { page-break-inside: avoid; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="header-section">
+                        <h1>التقرير المالي الشهري</h1>
+                        <div class="report-date">تاريخ الإصدار: ${new Date().toLocaleString('ar-SA')}</div>
+                    </div>
 
-                    <div style="display: flex; justify-content: space-between; gap: 15px; margin-top: 30px; margin-bottom: 30px;">
-                        <div style="flex: 1; text-align: center; padding: 20px; background: #f8fafc; border-top: 4px solid #10b981; border-radius: 8px;">
-                            <h3 style="margin:0 0 10px 0; color: #4b5563;">مداخيل الشهر</h3>
-                            <h2 style="margin:0; color: #10b981;">SAR ${lastMonthIncome.toFixed(2)}</h2>
+                    <div class="kpi-grid">
+                        <div class="kpi-card card-income">
+                            <h3>مداخيل الشهر الماضي</h3>
+                            <p class="text-green">SAR ${lastMonthIncome.toFixed(2)}</p>
                         </div>
-                        <div style="flex: 1; text-align: center; padding: 20px; background: #1e3a8a; border-radius: 8px; color: white;">
-                            <h3 style="margin:0 0 10px 0; color: #bfdbfe;">الرصيد الكلي المتاح</h3>
-                            <h2 style="margin:0;">SAR ${currentBalance.toFixed(2)}</h2>
+                        <div class="kpi-card card-balance">
+                            <h3>الرصيد الكلي المتاح</h3>
+                            <p>SAR ${currentBalance.toFixed(2)}</p>
                         </div>
-                        <div style="flex: 1; text-align: center; padding: 20px; background: #f8fafc; border-top: 4px solid #ef4444; border-radius: 8px;">
-                            <h3 style="margin:0 0 10px 0; color: #4b5563;">مصروفات الشهر</h3>
-                            <h2 style="margin:0; color: #ef4444;">SAR ${lastMonthExpense.toFixed(2)}</h2>
+                        <div class="kpi-card card-expense">
+                            <h3>مصروفات الشهر الماضي</h3>
+                            <p class="text-red">SAR ${lastMonthExpense.toFixed(2)}</p>
                         </div>
                     </div>
 
-                    <div style="display: flex; gap: 20px; margin-bottom: 30px;">
-                        <div style="flex: 1; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px;">
-                            <h3 style="margin-top: 0; color: #1e40af; border-bottom: 1px solid #e5e7eb; padding-bottom: 10px;">أداء الميزانية</h3>
+                    <div class="middle-grid page-break-avoid">
+                        <div class="chart-container">
+                            <h3 style="margin-top: 0; color: #4b5563;">تحليل مصروفات الشهر</h3>
+                            ${chartImageUrl ? `<img src="${chartImageUrl}" alt="Pie Chart" style="max-width: 100%; height: auto;">` : '<p class="text-muted">لا توجد مصروفات لرسم المخطط</p>'}
+                        </div>
+
+                        ${goldAsset && goldAsset.totalGrams > 0 ? `
+                        <div class="gold-card">
+                            <h3>محفظة الذهب الخالص</h3>
+                            <div style="font-size: 16px;">الوزن الإجمالي: ${goldAsset.totalGrams} جرام</div>
+                            <div class="gold-value">SAR ${goldAsset.currentValue?.toLocaleString() ?? '0.00'}</div>
+                            <div style="background: rgba(0,0,0,0.2); padding: 8px; border-radius: 6px; margin-top: 15px;">
+                                ${goldAsset.profitLoss >= 0 ? 'ربح' : 'خسارة'}: SAR ${Math.abs(goldAsset.profitLoss ?? 0).toFixed(2)} 
+                                (${goldAsset.profitLossPercentage}%)
+                            </div>
+                        </div>
+                        ` : '<div class="chart-container"><h3 style="margin-top: 0; color: #4b5563;">محفظة الذهب</h3><p class="text-muted">لا توجد أصول ذهبية مسجلة</p></div>'}
+                    </div>
+
+                    <div class="middle-grid page-break-avoid" style="margin-bottom: 20px;">
+                        <div style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 20px;">
+                            <h3 style="margin-top: 0; border-bottom: 1px solid #e5e7eb; padding-bottom: 10px;">أداء الميزانية</h3>
                             ${budgetsHtml}
                         </div>
-                        <div style="flex: 1; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px;">
-                            <h3 style="margin-top: 0; color: #1e40af; border-bottom: 1px solid #e5e7eb; padding-bottom: 10px;">الأهداف المالية</h3>
+                        <div style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 20px;">
+                            <h3 style="margin-top: 0; border-bottom: 1px solid #e5e7eb; padding-bottom: 10px;">الأهداف المالية</h3>
                             ${goalsHtml}
                         </div>
                     </div>
 
-                    <h3 style="color: #1e40af;">سجل العمليات (الشهر الماضي)</h3>
-                    <table style="width: 100%; border-collapse: collapse; text-align: right; font-size: 14px;">
+                    <h2 class="page-break-avoid">سجل العمليات (الشهر الماضي)</h2>
+                    <table>
                         <thead>
-                            <tr style="background-color: #f9fafb;">
-                                <th style="border: 1px solid #e5e7eb; padding: 12px; color: #374151;">التاريخ</th>
-                                <th style="border: 1px solid #e5e7eb; padding: 12px; color: #374151;">الوصف</th>
-                                <th style="border: 1px solid #e5e7eb; padding: 12px; color: #374151;">التصنيف</th>
-                                <th style="border: 1px solid #e5e7eb; padding: 12px; color: #374151;">المبلغ</th>
+                            <tr>
+                                <th>التاريخ</th>
+                                <th>الوصف</th>
+                                <th>التصنيف</th>
+                                <th>المبلغ</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -350,12 +465,11 @@ cron.schedule('0 8 1 * *', async () => {
             </html>
         `;
 
-        // 5. توليد ملف الـ PDF
+        // 6. توليد الـ PDF وإرساله عبر Resend
         const options = { format: 'A4', printBackground: true };
         const file = { content: htmlContent };
         const pdfBuffer = await html_to_pdf.generatePdf(file, options);
 
-        // 6. إرسال التقرير عبر Resend
         const monthNames = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"];
         const reportMonth = monthNames[lastMonth];
 
@@ -366,21 +480,15 @@ cron.schedule('0 8 1 * *', async () => {
             html: `
                 <div dir="rtl" style="font-family: Arial, sans-serif;">
                     <h2>مرحباً بك! 👋</h2>
-                    <p>لقد قمنا بتجهيز تقريرك المالي لشهر <strong>${reportMonth}</strong>.</p>
-                    <p>تجد في المرفقات نسخة PDF تحتوي على ملخص مداخيلك، مصروفاتك، وحالة أهدافك وميزانيتك.</p>
-                    <p>نتمنى لك شهراً جديداً مليئاً بالنجاح المالي! 🚀</p>
+                    <p>لقد قمنا بتجهيز تقريرك المالي المتميز لشهر <strong>${reportMonth}</strong>.</p>
+                    <p>تجد في المرفقات نسختك الشاملة.</p>
                 </div>
             `,
-            attachments: [
-                {
-                    filename: `Financial_Report_${reportMonth}.pdf`,
-                    content: pdfBuffer,
-                }
-            ]
+            attachments: [{ filename: `Financial_Report_${reportMonth}.pdf`, content: pdfBuffer }]
         });
 
         if (error) throw error;
-        console.log(`✅ [Monthly Report]: تم إرسال التقرير الشهري بنجاح! ID: ${data.id}`);
+        console.log(`✅ [Monthly Report]: تم إرسال التقرير الشامل بنجاح! ID: ${data.id}`);
 
     } catch (error) {
         console.error('❌ [Monthly Report Error]:', error);
