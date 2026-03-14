@@ -1412,16 +1412,16 @@ app.get('/api/advisor', authenticateToken, (req, res) => {
 
 const transporter = nodemailer.createTransport({
     host: 'smtp.gmail.com',
-    port: 465, // المنفذ الآمن لـ Gmail
-    secure: true, // استخدام SSL
+    port: 465,
+    secure: true,
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
     },
-    // هذا الخيار يحل مشكلة الـ Timeout في بعض السيرفرات السحابية
     tls: {
         rejectUnauthorized: false
-    }
+    },
+    family: 4 // 👈 هذا السطر السحري يجبر السيرفر على استخدام IPv4 بدلاً من IPv6
 });
 
 // 2. مسار التجربة عبر المتصفح
