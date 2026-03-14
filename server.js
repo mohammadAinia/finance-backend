@@ -174,6 +174,50 @@ const cron = require('node-cron');
 const { Expo } = require('expo-server-sdk');
 let expo = new Expo();
 
+
+// ✅ وظيفة ترحيل فائض الميزانية (تعمل يومياً الساعة 11:50 مساءً وتنفذ فقط في آخر يوم من الشهر)
+cron.schedule('50 23 28-31 * *', () => {
+    // التحقق هل غداً هو اليوم الأول من الشهر؟
+    const tomorrow = new Date(new Date().getTime() + 24 * 60 * 60 * 1000);
+    if (tomorrow.getDate() !== 1) return; // إذا لم يكن غداً يوم 1، توقف
+
+    console.log('🧹 [Month-End Sweep]: جاري البحث عن فائض الميزانيات وترحيلها...');
+
+    db.query('SELECT Id FROM Users', (err, users) => {
+        if (err) return;
+        
+        users.forEach(user => {
+            const userId = user.Id;
+            // التحقق هل لدى المستخدم هدف يقبل ترحيل الفائض؟
+            db.query('SELECT Id, GoalName FROM SavingsGoals WHERE UserId = ? AND SweepSurplus = 1 LIMIT 1', [userId], (err, goals) => {
+                if (err || goals.length === 0) return;
+                const sweepGoal = goals[0];
+
+                // حساب إجمالي الميزانية
+                db.query('SELECT SUM(AmountLimit) as TotalBudget FROM Budgets WHERE UserId = ?', [userId], (err, budgetRes) => {
+                    const totalBudget = budgetRes[0]?.TotalBudget || 0;
+                    if (totalBudget <= 0) return;
+
+                    // حساب ما تم صرفه هذا الشهر
+                    db.query(`SELECT SUM(Amount) as TotalSpent FROM Transactions WHERE UserId = ? AND Type = 'expense' AND MONTH(TransactionDate) = MONTH(CURRENT_DATE()) AND YEAR(TransactionDate) = YEAR(CURRENT_DATE()) AND Source != 'AutoSave'`, [userId], (err, transRes) => {
+                        const totalSpent = transRes[0]?.TotalSpent || 0;
+                        const surplus = totalBudget - totalSpent;
+
+                        // إذا كان هناك فائض، حوله للهدف
+                        if (surplus > 0) {
+                            db.query('UPDATE SavingsGoals SET CurrentAmount = CurrentAmount + ? WHERE Id = ?', [surplus, sweepGoal.Id]);
+                            
+                            const encryptedDesc = encrypt(`تحويل فائض ميزانية الشهر للهدف: ${sweepGoal.GoalName}`);
+                            db.query(`INSERT INTO Transactions (UserId, Amount, Type, Category, SubCategory, Description, TransactionDate, PaymentMethod, Source) VALUES (?, ?, 'expense', 'ادخار', 'ترحيل فائض', ?, NOW(), 'System', 'Sweep')`, [userId, surplus, encryptedDesc]);
+                            
+                            console.log(`✅ [Month-End Sweep]: تم ترحيل مبلغ ${surplus} للمستخدم ${userId}`);
+                        }
+                    });
+                });
+            });
+        });
+    });
+});
 // ✅ وظيفة برمجية تعمل تلقائياً كل ساعتين
 // السلسلة '0 */2 * * *' تعني (عند الدقيقة 0 من كل ساعتين)
 cron.schedule('0 */2 * * *', async () => {
@@ -245,6 +289,29 @@ cron.schedule('0 */2 * * *', async () => {
         console.error('Cron Job Error:', error);
     }
 });
+// دالة مساعدة لاقتطاع نسبة من الدخل تلقائياً
+function processAutoSavings(userId, incomeAmount) {
+    if (incomeAmount <= 0) return;
+
+    // جلب الأهداف التي تحتوي على نسبة اقتطاع
+    db.query('SELECT * FROM SavingsGoals WHERE UserId = ? AND AutoSavePercentage > 0', [userId], (err, goals) => {
+        if (err || goals.length === 0) return;
+
+        goals.forEach(goal => {
+            const cutAmount = (incomeAmount * goal.AutoSavePercentage) / 100;
+            if (cutAmount > 0) {
+                // 1. زيادة رصيد الهدف
+                db.query('UPDATE SavingsGoals SET CurrentAmount = CurrentAmount + ? WHERE Id = ?', [cutAmount, goal.Id]);
+                
+                // 2. تسجيل عملية "مصروف" في المعاملات حتى يتم خصمها من رصيد المحفظة العام
+                const encryptedDesc = encrypt(`ادخار تلقائي (${goal.AutoSavePercentage}%) للهدف: ${goal.GoalName}`);
+                const query = `INSERT INTO Transactions (UserId, Amount, Type, Category, SubCategory, Description, TransactionDate, PaymentMethod, Source) VALUES (?, ?, 'expense', 'ادخار', 'تلقائي', ?, NOW(), 'System', 'AutoSave')`;
+                
+                db.query(query, [userId, cutAmount, encryptedDesc]);
+            }
+        });
+    });
+}
 // أضف هذا المسار في server.js لتجربة الإرسال اليدوي
 app.get('/api/test-notification', async (req, res) => {
     const { Expo } = require('expo-server-sdk');
@@ -356,17 +423,28 @@ app.get('/api/goals', authenticateToken, (req, res) => {
     );
 });
 
-// 2. إضافة هدف جديد
+// تحديث بنية الجدول تلقائياً (ضعه بعد التأكد من الاتصال بقاعدة البيانات)
+db.query("SHOW COLUMNS FROM SavingsGoals LIKE 'AutoSavePercentage'", (err, res) => {
+    if (res && res.length === 0) {
+        db.query("ALTER TABLE SavingsGoals ADD COLUMN AutoSavePercentage INT DEFAULT 0, ADD COLUMN SweepSurplus BOOLEAN DEFAULT FALSE");
+        console.log('✅ Added AutoSave columns to SavingsGoals table');
+    }
+});
+
+// 2. تحديث مسار إضافة هدف جديد
 app.post('/api/goals', authenticateToken, (req, res) => {
-    const { GoalName, TargetAmount } = req.body;
+    const { GoalName, TargetAmount, AutoSavePercentage, SweepSurplus } = req.body;
     
     if (!GoalName || !TargetAmount) {
         return res.status(400).json({ error: 'اسم الهدف والمبلغ المستهدف مطلوبان' });
     }
 
+    const autoPercentage = parseInt(AutoSavePercentage) || 0;
+    const sweep = SweepSurplus ? 1 : 0;
+
     db.query(
-        'INSERT INTO SavingsGoals (UserId, GoalName, TargetAmount, CurrentAmount) VALUES (?, ?, ?, 0)',
-        [req.user.id, GoalName, TargetAmount],
+        'INSERT INTO SavingsGoals (UserId, GoalName, TargetAmount, CurrentAmount, AutoSavePercentage, SweepSurplus) VALUES (?, ?, ?, 0, ?, ?)',
+        [req.user.id, GoalName, TargetAmount, autoPercentage, sweep],
         (err, result) => {
             if (err) {
                 console.error('Error adding goal:', err);
@@ -622,6 +700,9 @@ app.post('/api/transactions', authenticateToken, (req, res) => {
 
     db.query(query, values, (err, result) => {
         if (err) return res.status(500).json({ error: 'Failed to save transaction' });
+        if (Type === 'income') {
+            processAutoSavings(userId, Amount);
+        }
         res.status(201).json({ success: true, Id: result.insertId });
     });
 });
@@ -719,124 +800,242 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
     let isRecurring = false;
     let needsAI = true;
 
-    // =========================================
-    // 📚 قاموس ضخم للمتاجر السعودية (أكثر من 200 متجر)
-    // =========================================
+
     const merchantsDictionary = [
-        // ========== محطات الوقود ==========
+        // ========== 🚗 محطات الوقود وصيانة السيارات ==========
         { keys: ["joil", "j oil", "جي اويل", "جويل"], name: "جي أويل", cat: "السيارة والمواصلات", sub: "محطات وقود" },
         { keys: ["aldrees", "الدريس"], name: "الدريس", cat: "السيارة والمواصلات", sub: "محطات وقود" },
         { keys: ["sasco", "ساسكو"], name: "ساسكو", cat: "السيارة والمواصلات", sub: "محطات وقود" },
-        { keys: ["petromin", "بترومين"], name: "بترومين", cat: "السيارة والمواصلات", sub: "محطات وقود" },
+        { keys: ["petromin", "بترومين"], name: "بترومين", cat: "السيارة والمواصلات", sub: "صيانة ووقود" },
         { keys: ["shell", "شل"], name: "شل", cat: "السيارة والمواصلات", sub: "محطات وقود" },
         { keys: ["total", "توتال"], name: "توتال", cat: "السيارة والمواصلات", sub: "محطات وقود" },
         { keys: ["enoc", "اينوك"], name: "اينوك", cat: "السيارة والمواصلات", sub: "محطات وقود" },
         { keys: ["adnoc", "ادنوك"], name: "ادنوك", cat: "السيارة والمواصلات", sub: "محطات وقود" },
+        { keys: ["naft", "نفط"], name: "محطات نفط", cat: "السيارة والمواصلات", sub: "محطات وقود" },
+        { keys: ["sahel", "سهل"], name: "محطات سهل", cat: "السيارة والمواصلات", sub: "محطات وقود" },
+        { keys: ["tashelat", "تسهيلات"], name: "محطات تسهيلات", cat: "السيارة والمواصلات", sub: "محطات وقود" },
+        { keys: ["mizan", "ميزان", "الميزان"], name: "ميزان سيارات", cat: "السيارة والمواصلات", sub: "صيانة سيارات" },
+        { keys: ["aljomaih", "الجميح"], name: "الجميح للسيارات", cat: "السيارة والمواصلات", sub: "صيانة سيارات" },
+        { keys: ["abdul latif jameel", "عبداللطيف جميل", "عبد اللطيف جميل"], name: "عبداللطيف جميل", cat: "السيارة والمواصلات", sub: "صيانة سيارات" },
 
-        // ========== السوبرماركت والتموين ==========
+        // ========== 🛒 السوبرماركت والتموين ==========
         { keys: ["panda", "بنده", "باندا"], name: "بنده", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
         { keys: ["danube", "الدانوب"], name: "الدانوب", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
         { keys: ["carrefour", "كارفور"], name: "كارفور", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
-        { keys: ["lulu", "لولو"], name: "لولو", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
-        { keys: ["tamimi", "تميمي", "تميمى"], name: "تميمي", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
-        { keys: ["farm", "فارم", "الاسرة"], name: "أسواق الأسرة", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["lulu", "لولو"], name: "لولو هايبرماركت", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["tamimi", "تميمي", "تميمى", "التميمي"], name: "أسواق التميمي", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["othaim", "العثيم", "عثيم"], name: "أسواق العثيم", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["farm", "فارم", "الاسرة", "أسواق الأسرة"], name: "أسواق المزرعة", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
         { keys: ["nesto", "نستو"], name: "نستو", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
-        { keys: ["bin dawoud", "بن داود"], name: "بن داود", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["bin dawoud", "بن داود", "بن داوود", "bindawood"], name: "بن داود", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
         { keys: ["al-azizia", "العزيزية"], name: "العزيزية", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
-        { keys: ["manhal", "المنهل"], name: "المنهل", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["manhal", "المنهل"], name: "المنهل", cat: "المنزل والمقاضي", sub: "مياه وتموين" },
         { keys: ["raghdan", "رغدان"], name: "رغدان", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["alraya", "الراية"], name: "أسواق الراية", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["sadhan", "السدحان"], name: "السدحان", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["spar", "سبار"], name: "سبار", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
+        { keys: ["meed", "ميد"], name: "ميد", cat: "المنزل والمقاضي", sub: "تموينات" },
+        { keys: ["sarawat", "السروات"], name: "السروات", cat: "المنزل والمقاضي", sub: "سوبرماركت" },
 
-        // ========== المطاعم والكافيهات ==========
-        { keys: ["mcdonald", "mcd", "ماك", "مكدونالدز"], name: "ماكدونالدز", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        // ========== 🍔 المطاعم والوجبات السريعة ==========
+        { keys: ["mcdonald", "mcd", "ماك", "مكدونالدز", "ماكدونالدز"], name: "ماكدونالدز", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
         { keys: ["albaik", "البيك", "البيع"], name: "البيك", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
-        { keys: ["kfc", "ك إف سي", "كنتاكي"], name: "كنتاكي", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
-        { keys: ["burger king", "برجر كنج"], name: "برجر كنج", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["kfc", "ك إف سي", "كنتاكي", "kentucky"], name: "كنتاكي", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["burger king", "برجر كنج", "برجر كينج"], name: "برجر كنج", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
         { keys: ["herfy", "هرفي"], name: "هرفي", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
         { keys: ["hardee", "هارديز"], name: "هارديز", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
-        { keys: ["pizza hut", "بيتزا هت"], name: "بيتزا هت", cat: "المطاعم والكافيهات", sub: "مطاعم" },
-        { keys: ["domino", "دومينوز"], name: "دومينوز", cat: "المطاعم والكافيهات", sub: "مطاعم" },
-        { keys: ["starbucks", "ستاربكس"], name: "ستاربكس", cat: "المطاعم والكافيهات", sub: "كافيهات" },
-        { keys: ["costa", "كوستا"], name: "كوستا", cat: "المطاعم والكافيهات", sub: "كافيهات" },
-        { keys: ["dunkin", "دنكن"], name: "دنكن دونتس", cat: "المطاعم والكافيهات", sub: "كافيهات" },
-        { keys: ["tim hortons", "تيم هورتون"], name: "تيم هورتون", cat: "المطاعم والكافيهات", sub: "كافيهات" },
-        { keys: ["barn cafe", "بارن كافيه", "barn"], name: "بارن كافيه", cat: "المطاعم والكافيهات", sub: "كافيهات" },
-        { keys: ["shawy", "شاورمر", "شاورما"], name: "شاورمر", cat: "المطاعم والكافيهات", sub: "مطاعم" },
-        { keys: ["mama noura", "ماما نورة"], name: "ماما نورة", cat: "المطاعم والكافيهات", sub: "مطاعم" },
-        { keys: ["abu zaid", "ابو زيد"], name: "ابو زيد", cat: "المطاعم والكافيهات", sub: "مطاعم" },
+        { keys: ["pizza hut", "بيتزا هت"], name: "بيتزا هت", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["domino", "دومينوز"], name: "دومينوز بيتزا", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["maestro", "مايسترو"], name: "مايسترو بيتزا", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["kudu", "كودو"], name: "كودو", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["subway", "صب واي", "صَب واي"], name: "صب واي", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["texas chicken", "تكساس تشيكن", "تكساس"], name: "تكساس تشيكن", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["shawarmer", "شاورمر"], name: "شاورمر", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["mama noura", "ماما نورة", "ماما نوره"], name: "ماما نورة", cat: "المطاعم والكافيهات", sub: "مطاعم" },
+        { keys: ["abu zaid", "ابو زيد", "أبو زيد"], name: "ابو زيد", cat: "المطاعم والكافيهات", sub: "مطاعم" },
         { keys: ["alromansiah", "الرومانسية"], name: "الرومانسية", cat: "المطاعم والكافيهات", sub: "مطاعم" },
-        { keys: ["shawarma", "شاورما"], name: "شاورما", cat: "المطاعم والكافيهات", sub: "مطاعم" },
+        { keys: ["al tazaj", "tazaj", "الطازج"], name: "الطازج", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
+        { keys: ["shobak", "شوبك"], name: "شوبك", cat: "المطاعم والكافيهات", sub: "مطاعم" },
+        { keys: ["canton", "كانتون"], name: "كانتون", cat: "المطاعم والكافيهات", sub: "مطاعم" },
+        { keys: ["shawarma", "شاورما"], name: "شاورما", cat: "المطاعم والكافيهات", sub: "وجبات سريعة" },
 
-        // ========== الصحة والجمال ==========
+        // ========== ☕ الكافيهات والمخابز ==========
+        { keys: ["starbucks", "ستاربكس"], name: "ستاربكس", cat: "المطاعم والكافيهات", sub: "كافيهات" },
+        { keys: ["costa", "كوستا"], name: "كوستا كافيه", cat: "المطاعم والكافيهات", sub: "كافيهات" },
+        { keys: ["dunkin", "دنكن", "دانكن"], name: "دنكن دونتس", cat: "المطاعم والكافيهات", sub: "كافيهات" },
+        { keys: ["tim hortons", "تيم هورتون", "تيم هورتنز"], name: "تيم هورتنز", cat: "المطاعم والكافيهات", sub: "كافيهات" },
+        { keys: ["barn cafe", "بارن كافيه", "barns", "بارنز", "barn"], name: "بارنز", cat: "المطاعم والكافيهات", sub: "كافيهات" },
+        { keys: ["dr cafe", "د. كيف", "د كيف"], name: "د. كيف", cat: "المطاعم والكافيهات", sub: "كافيهات" },
+        { keys: ["half million", "هاف مليون"], name: "هاف مليون", cat: "المطاعم والكافيهات", sub: "كافيهات" },
+        { keys: ["jolt", "جولت"], name: "جولت", cat: "المطاعم والكافيهات", sub: "كافيهات" },
+        { keys: ["over dose", "overdose", "اوفر دوز"], name: "اوفر دوز", cat: "المطاعم والكافيهات", sub: "كافيهات" },
+        { keys: ["waynes", "واينز"], name: "واينز كافيه", cat: "المطاعم والكافيهات", sub: "كافيهات" },
+        { keys: ["caribou", "كاريبو"], name: "كاريبو كافيه", cat: "المطاعم والكافيهات", sub: "كافيهات" },
+        { keys: ["krispy kreme", "كريسبي كريم"], name: "كريسبي كريم", cat: "المطاعم والكافيهات", sub: "مخبوزات وحلويات" },
+        { keys: ["baskin robbins", "باسكن روبنز"], name: "باسكن روبنز", cat: "المطاعم والكافيهات", sub: "مخبوزات وحلويات" },
+        { keys: ["saadeddin", "سعد الدين"], name: "حلويات سعد الدين", cat: "المطاعم والكافيهات", sub: "مخبوزات وحلويات" },
+
+        // ========== 🛵 تطبيقات التوصيل ==========
+        { keys: ["jahez", "جاهز"], name: "جاهز", cat: "المطاعم والكافيهات", sub: "توصيل طلبات" },
+        { keys: ["hungerstation", "hunger station", "هنقرستيشن", "هنقر ستيشن"], name: "هنقرستيشن", cat: "المطاعم والكافيهات", sub: "توصيل طلبات" },
+        { keys: ["toyou", "تويو"], name: "تويو", cat: "المطاعم والكافيهات", sub: "توصيل طلبات" },
+        { keys: ["mrsool", "مرسول"], name: "مرسول", cat: "المنزل والمقاضي", sub: "توصيل طلبات" },
+        { keys: ["noon food", "نون فود"], name: "نون فود", cat: "المطاعم والكافيهات", sub: "توصيل طلبات" },
+        { keys: ["the chefz", "chefz", "ذا شفز", "شيفز"], name: "ذا شفز", cat: "المطاعم والكافيهات", sub: "توصيل طلبات" },
+        { keys: ["careem", "كريم"], name: "كريم", cat: "السيارة والمواصلات", sub: "تطبيقات نقل" },
+        { keys: ["uber", "اوبر", "أوبر"], name: "أوبر", cat: "السيارة والمواصلات", sub: "تطبيقات نقل" },
+        { keys: ["jeeny", "جيني"], name: "جيني", cat: "السيارة والمواصلات", sub: "تطبيقات نقل" },
+        { keys: ["ego", "ايجو", "إيجو"], name: "ايجو", cat: "السيارة والمواصلات", sub: "تطبيقات نقل" },
+
+        // ========== 💊 الصحة والجمال ==========
         { keys: ["nahdi", "النهدي"], name: "صيدلية النهدي", cat: "الصحة والجمال", sub: "صيدليات" },
-        { keys: ["al-dawaa", "الدواء"], name: "صيدلية الدواء", cat: "الصحة والجمال", sub: "صيدليات" },
-        { keys: ["watsons", "واتسون"], name: "واطسون", cat: "الصحة والجمال", sub: "مستحضرات تجميل" },
-        { keys: ["abdal samad", "عبدالصمد", "عبد الصمد"], name: "عبدالصمد القرشي", cat: "الصحة والجمال", sub: "عطور" },
-        { keys: ["aljasser", "الجاسر"], name: "الجاسر", cat: "الصحة والجمال", sub: "عطور" },
-        { keys: ["bath & body", "باث اند"], name: "باث آند بودي", cat: "الصحة والجمال", sub: "مستحضرات تجميل" },
+        { keys: ["al-dawaa", "الدواء", "aldawaa"], name: "صيدلية الدواء", cat: "الصحة والجمال", sub: "صيدليات" },
+        { keys: ["watsons", "واتسون", "واطسون"], name: "واطسون", cat: "الصحة والجمال", sub: "مستحضرات تجميل" },
+        { keys: ["whites", "وايتس"], name: "صيدلية وايتس", cat: "الصحة والجمال", sub: "صيدليات" },
+        { keys: ["al-saggaf", "السقاف"], name: "صيدلية السقاف", cat: "الصحة والجمال", sub: "صيدليات" },
+        { keys: ["abdal samad", "abdulsamad", "عبدالصمد", "عبد الصمد"], name: "عبدالصمد القرشي", cat: "الصحة والجمال", sub: "عطور" },
+        { keys: ["arabian oud", "العربية للعود"], name: "العربية للعود", cat: "الصحة والجمال", sub: "عطور" },
+        { keys: ["almajmaah", "الماجد للعود", "almajed"], name: "الماجد للعود", cat: "الصحة والجمال", sub: "عطور" },
+        { keys: ["ibrahim alqurashi", "ابراهيم القرشي", "إبراهيم القرشي"], name: "إبراهيم القرشي", cat: "الصحة والجمال", sub: "عطور" },
+        { keys: ["aljasser", "الجاسر"], name: "الجاسر للعطور", cat: "الصحة والجمال", sub: "عطور" },
+        { keys: ["bath & body", "bath and body", "باث اند", "باث آند"], name: "باث آند بودي", cat: "الصحة والجمال", sub: "مستحضرات تجميل" },
         { keys: ["sephora", "سيفورا"], name: "سيفورا", cat: "الصحة والجمال", sub: "مستحضرات تجميل" },
-        { keys: ["faces", "فيس"], name: "فيس", cat: "الصحة والجمال", sub: "مستحضرات تجميل" },
-        { keys: ["centrepoint", "سنتربوينت"], name: "سنتربوينت", cat: "التسوق", sub: "ملابس" },
+        { keys: ["faces", "فيس", "وجوه"], name: "وجوه (فيسز)", cat: "الصحة والجمال", sub: "مستحضرات تجميل" },
+        { keys: ["oud milano", "عود ميلانو"], name: "عود ميلانو", cat: "الصحة والجمال", sub: "مستحضرات تجميل" },
+        { keys: ["derma", "ديرما"], name: "ديرما", cat: "الصحة والجمال", sub: "عيادات وتجميل" },
 
-        // ========== الإلكترونيات ==========
-        { keys: ["jarir", "جرير"], name: "جرير", cat: "التسوق", sub: "إلكترونيات" },
+        // ========== 💻 الإلكترونيات والأجهزة ==========
+        { keys: ["jarir", "جرير"], name: "مكتبة جرير", cat: "التسوق", sub: "إلكترونيات ومكتبية" },
         { keys: ["extra", "اكسترا", "إكسترا"], name: "إكسترا", cat: "التسوق", sub: "إلكترونيات" },
+        { keys: ["xcite", "اكسايت", "إكسايت"], name: "إكسايت", cat: "التسوق", sub: "إلكترونيات" },
+        { keys: ["eddy", "ايدي", "إيدي"], name: "إيدي للإلكترونيات", cat: "التسوق", sub: "إلكترونيات" },
+        { keys: ["black box", "الصندوق الاسود", "الصندوق الأسود"], name: "الصندوق الأسود", cat: "التسوق", sub: "إلكترونيات" },
+        { keys: ["emax", "ايماكس"], name: "إيماكس", cat: "التسوق", sub: "إلكترونيات" },
+        { keys: ["virgin mega", "فيرجن ميجا", "فيرجن ميجاب"], name: "فيرجن ميجاستور", cat: "التسوق", sub: "إلكترونيات وترفيه" },
         { keys: ["al-mukmal", "المكمل"], name: "المكمل", cat: "التسوق", sub: "إلكترونيات" },
+        { keys: ["apple store", "ابل ستور", "أبل ستور"], name: "أبل ستور", cat: "التسوق", sub: "إلكترونيات" },
 
-        // ========== الاشتراكات الرقمية ==========
-        { keys: ["stc", "الاتصالات"], name: "STC", cat: "فواتير واشتراكات", sub: "اتصالات", recurring: true },
+        // ========== 👗 الملابس والأزياء ==========
+        { keys: ["centrepoint", "سنتربوينت", "سنتر بوينت"], name: "سنتربوينت", cat: "التسوق", sub: "ملابس" },
+        { keys: ["splash", "سبلاش"], name: "سبلاش", cat: "التسوق", sub: "ملابس" },
+        { keys: ["max", "ماكس", "city max", "سيتي ماكس"], name: "سيتي ماكس", cat: "التسوق", sub: "ملابس" },
+        { keys: ["red tag", "redtag", "ريد تاغ", "ريدتاغ"], name: "ريد تاغ", cat: "التسوق", sub: "ملابس" },
+        { keys: ["zara", "زارا"], name: "زارا", cat: "التسوق", sub: "ملابس" },
+        { keys: ["hm", "h&m", "إتش آند إم", "اتش اند ام"], name: "H&M", cat: "التسوق", sub: "ملابس" },
+        { keys: ["sacoor", "ساكور"], name: "ساكور", cat: "التسوق", sub: "ملابس" },
+        { keys: ["mango", "مانجو"], name: "مانجو", cat: "التسوق", sub: "ملابس" },
+        { keys: ["next", "نكست"], name: "نكست", cat: "التسوق", sub: "ملابس" },
+        { keys: ["lc waikiki", "ال سي وايكيكي"], name: "ال سي وايكيكي", cat: "التسوق", sub: "ملابس" },
+        { keys: ["riva", "ريفا"], name: "ريفا", cat: "التسوق", sub: "ملابس" },
+        { keys: ["milano", "ميلانو"], name: "ميلانو", cat: "التسوق", sub: "أحذية وحقائب" },
+        { keys: ["sun and sand", "sun & sand", "الشمس والرمال"], name: "الشمس والرمال", cat: "التسوق", sub: "ملابس رياضية" },
+        { keys: ["adidas", "اديداس", "أديداس"], name: "أديداس", cat: "التسوق", sub: "ملابس رياضية" },
+        { keys: ["nike", "نايك", "نايكي"], name: "نايك", cat: "التسوق", sub: "ملابس رياضية" },
+        { keys: ["puma", "بوما"], name: "بوما", cat: "التسوق", sub: "ملابس رياضية" },
+        { keys: ["foot locker", "فوت لوكر"], name: "فوت لوكر", cat: "التسوق", sub: "ملابس رياضية" },
+
+        // ========== 🌐 التسوق عبر الإنترنت ==========
+        { keys: ["amazon", "امازون", "أمازون"], name: "أمازون", cat: "التسوق", sub: "تسوق عبر الإنترنت" },
+        { keys: ["noon", "نون"], name: "نون", cat: "التسوق", sub: "تسوق عبر الإنترنت" },
+        { keys: ["shein", "شي ان", "شي إن"], name: "شي إن", cat: "التسوق", sub: "تسوق عبر الإنترنت" },
+        { keys: ["namshi", "نمشي"], name: "نمشي", cat: "التسوق", sub: "تسوق عبر الإنترنت" },
+        { keys: ["asos", "اسوس"], name: "أسوس", cat: "التسوق", sub: "تسوق عبر الإنترنت" },
+        { keys: ["aliexpress", "ali express", "علي اكسبرس", "علي إكسبرس"], name: "علي إكسبرس", cat: "التسوق", sub: "تسوق عبر الإنترنت" },
+        { keys: ["iherb", "اي هيرب", "آي هيرب"], name: "آي هيرب", cat: "التسوق", sub: "تسوق عبر الإنترنت" },
+        { keys: ["temu", "تيمو"], name: "تيمو", cat: "التسوق", sub: "تسوق عبر الإنترنت" },
+        { keys: ["trendyol", "ترينديول"], name: "ترينديول", cat: "التسوق", sub: "تسوق عبر الإنترنت" },
+        { keys: ["golden scent", "قولدن سنت"], name: "قولدن سنت", cat: "التسوق", sub: "تسوق عبر الإنترنت" },
+        { keys: ["nice one", "نايس ون"], name: "نايس ون", cat: "التسوق", sub: "تسوق عبر الإنترنت" },
+
+        // ========== 📱 الاشتراكات الرقمية والاتصالات ==========
+        { keys: ["stc", "الاتصالات السعودية"], name: "STC", cat: "فواتير واشتراكات", sub: "اتصالات", recurring: true },
         { keys: ["mobily", "موبايلي"], name: "موبايلي", cat: "فواتير واشتراكات", sub: "اتصالات", recurring: true },
         { keys: ["zain", "زين"], name: "زين", cat: "فواتير واشتراكات", sub: "اتصالات", recurring: true },
-        { keys: ["virgin", "فيرجن"], name: "فيرجن", cat: "فواتير واشتراكات", sub: "اتصالات", recurring: true },
-        { keys: ["netflix", "نتفلكس"], name: "Netflix", cat: "فواتير واشتراكات", sub: "ترفيه", recurring: true },
-        { keys: ["shahid", "شاهد"], name: "شاهد", cat: "فواتير واشتراكات", sub: "ترفيه", recurring: true },
+        { keys: ["virgin mobile", "فيرجن موبايل"], name: "فيرجن موبايل", cat: "فواتير واشتراكات", sub: "اتصالات", recurring: true },
+        { keys: ["lebara", "ليبارا"], name: "ليبارا", cat: "فواتير واشتراكات", sub: "اتصالات", recurring: true },
+        { keys: ["salam", "سلام موبايل"], name: "سلام", cat: "فواتير واشتراكات", sub: "اتصالات", recurring: true },
+        { keys: ["yaqoot", "ياقوت"], name: "ياقوت", cat: "فواتير واشتراكات", sub: "اتصالات", recurring: true },
+        { keys: ["jawwy", "جوي"], name: "جوي من STC", cat: "فواتير واشتراكات", sub: "اتصالات", recurring: true },
+        { keys: ["netflix", "نتفلكس", "نتفليكس"], name: "Netflix", cat: "فواتير واشتراكات", sub: "ترفيه", recurring: true },
+        { keys: ["shahid", "شاهد"], name: "شاهد VIP", cat: "فواتير واشتراكات", sub: "ترفيه", recurring: true },
         { keys: ["spotify", "سبوتيفاي"], name: "Spotify", cat: "فواتير واشتراكات", sub: "ترفيه", recurring: true },
-        { keys: ["apple music", "ابل ميوزك"], name: "Apple Music", cat: "فواتير واشتراكات", sub: "ترفيه", recurring: true },
-        { keys: ["youtube premium", "يوتيوب"], name: "YouTube Premium", cat: "فواتير واشتراكات", sub: "ترفيه", recurring: true },
-        { keys: ["openai", "chatgpt", "تشات جي بي تي"], name: "OpenAI", cat: "فواتير واشتراكات", sub: "اشتراكات رقمية", recurring: true },
+        { keys: ["apple.com/bill", "apple music", "ابل ميوزك", "ابل ستور", "itunes"], name: "Apple Services", cat: "فواتير واشتراكات", sub: "خدمات أبل", recurring: true },
+        { keys: ["youtube", "يوتيوب"], name: "YouTube Premium", cat: "فواتير واشتراكات", sub: "ترفيه", recurring: true },
+        { keys: ["openai", "chatgpt", "تشات جي بي تي"], name: "OpenAI ChatGPT", cat: "فواتير واشتراكات", sub: "اشتراكات رقمية", recurring: true },
         { keys: ["microsoft", "مايكروسوفت"], name: "Microsoft", cat: "فواتير واشتراكات", sub: "اشتراكات رقمية", recurring: true },
-        { keys: ["google", "قوقل"], name: "Google", cat: "فواتير واشتراكات", sub: "اشتراكات رقمية", recurring: true },
-        { keys: ["amazon", "امازون"], name: "Amazon", cat: "التسوق", sub: "تسوق عبر الإنترنت" },
-        { keys: ["noon", "نون"], name: "نون", cat: "التسوق", sub: "تسوق عبر الإنترنت" },
+        { keys: ["google", "g.co", "قوقل"], name: "Google Services", cat: "فواتير واشتراكات", sub: "اشتراكات رقمية", recurring: true },
+        { keys: ["bein", "بي ان", "بي إن"], name: "beIN Sports", cat: "فواتير واشتراكات", sub: "ترفيه", recurring: true },
+        { keys: ["osn", "او اس ان"], name: "OSN", cat: "فواتير واشتراكات", sub: "ترفيه", recurring: true },
+        { keys: ["amazon prime", "امازون برايم"], name: "Amazon Prime", cat: "فواتير واشتراكات", sub: "ترفيه", recurring: true },
+        { keys: ["playstation", "بليستيشن", "بلايستيشن"], name: "PlayStation Network", cat: "فواتير واشتراكات", sub: "ألعاب", recurring: true },
+        { keys: ["xbox", "اكس بوكس"], name: "Xbox Live", cat: "فواتير واشتراكات", sub: "ألعاب", recurring: true },
 
-        // ========== الملابس والأزياء ==========
-        { keys: ["sacoor", "ساكور"], name: "ساكور", cat: "التسوق", sub: "ملابس" },
-        { keys: ["splash", "سبلاش"], name: "سبلاش", cat: "التسوق", sub: "ملابس" },
-        { keys: ["max", "ماكس"], name: "ماكس", cat: "التسوق", sub: "ملابس" },
-        { keys: ["red tag", "ريد تاغ"], name: "ريد تاغ", cat: "التسوق", sub: "ملابس" },
-        { keys: ["zara", "زارا"], name: "زارا", cat: "التسوق", sub: "ملابس" },
-        { keys: ["hm", "إتش آند إم"], name: "H&M", cat: "التسوق", sub: "ملابس" },
+        // ========== 🏦 البنوك والخدمات المالية ==========
+        { keys: ["الاهلي", "البنك الاهلي", "alahli", "snb"], name: "البنك الأهلي", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        { keys: ["الراجحي", "مصرف الراجحي", "alrajhi"], name: "مصرف الراجحي", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        { keys: ["الانماء", "مصرف الانماء", "alinma"], name: "مصرف الإنماء", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        { keys: ["العربي", "البنك العربي", "anb"], name: "البنك العربي", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        { keys: ["ساب", "sabb", "sbb"], name: "بنك ساب", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        { keys: ["الرياض", "riyad bank"], name: "بنك الرياض", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        { keys: ["الجزيرة", "aljazira bank"], name: "بنك الجزيرة", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        { keys: ["البلاد", "albilad"], name: "بنك البلاد", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        { keys: ["الفرنسي", "alfransi", "bsf"], name: "البنك السعودي الفرنسي", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        { keys: ["الاول", "alawwal"], name: "البنك الأول", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        { keys: ["الاستثمار", "saib"], name: "البنك السعودي للاستثمار", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        { keys: ["stc pay", "stcpay", "اس تي سي باي"], name: "STC Pay", cat: "مصروفات عامة", sub: "محفظة رقمية", recurring: false },
+        { keys: ["urpay", "يورباي", "يور باي"], name: "UrPay", cat: "مصروفات عامة", sub: "محفظة رقمية", recurring: false },
+        { keys: ["alinmapay", "الانماء باي", "الإنماء باي"], name: "AlinmaPay", cat: "مصروفات عامة", sub: "محفظة رقمية", recurring: false },
 
-        // ========== البنوك ==========
-        { keys: ["الاهلي", "البنك الاهلي"], name: "البنك الأهلي", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
-        { keys: ["الراجحي", "مصرف الراجحي"], name: "مصرف الراجحي", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
-        { keys: ["الانماء"], name: "مصرف الإنماء", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
-        { keys: ["العربي", "البنك العربي"], name: "البنك العربي", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
-        { keys: ["ساب"], name: "بنك ساب", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
-        { keys: ["الرياض"], name: "بنك الرياض", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
-        { keys: ["الجزيرة"], name: "بنك الجزيرة", cat: "فواتير واشتراكات", sub: "عمولات بنكية", recurring: true },
+        // ========== 🏛️ الخدمات الحكومية والفواتير ==========
+        { keys: ["ساهر", "المرور", "saher", "mror"], name: "مخالفات المرور (ساهر)", cat: "السيارة والمواصلات", sub: "مخالفات", recurring: false },
+        { keys: ["الاحوال", "أبشر", "absher"], name: "خدمات أبشر", cat: "فواتير واشتراكات", sub: "خدمات حكومية" },
+        { keys: ["الكهرباء", "السعودية للكهرباء", "sec"], name: "الشركة السعودية للكهرباء", cat: "فواتير واشتراكات", sub: "كهرباء", recurring: true },
+        { keys: ["المياه", "المياة", "nwc"], name: "شركة المياه الوطنية", cat: "فواتير واشتراكات", sub: "مياه", recurring: true },
+        { keys: ["qiwa", "قوى"], name: "منصة قوى", cat: "فواتير واشتراكات", sub: "خدمات حكومية", recurring: true },
+        { keys: ["najiz", "ناجز"], name: "منصة ناجز", cat: "فواتير واشتراكات", sub: "خدمات حكومية", recurring: false },
+        { keys: ["muqeem", "مقيم"], name: "بوابة مقيم", cat: "فواتير واشتراكات", sub: "خدمات حكومية", recurring: true },
+        { keys: ["ejar", "ايجار", "إيجار"], name: "شبكة إيجار", cat: "المنزل والمقاضي", sub: "إيجار", recurring: true },
+        { keys: ["jawazat", "الجوازات"], name: "المديرية العامة للجوازات", cat: "فواتير واشتراكات", sub: "خدمات حكومية", recurring: false },
+        { keys: ["balady", "بلدي"], name: "منصة بلدي", cat: "فواتير واشتراكات", sub: "خدمات حكومية", recurring: false },
+        { keys: ["efaa", "ايفاء", "إيفاء"], name: "منصة إيفاء للمخالفات", cat: "فواتير واشتراكات", sub: "مخالفات", recurring: false },
+        { keys: ["ehsan", "احسان", "إحسان"], name: "منصة إحسان", cat: "مصروفات عامة", sub: "تبرعات", recurring: false },
 
-        // ========== التأمين ==========
-        { keys: ["تأمين", "التعاونية", "الراجحي تكافل", "دراية", "ملاذ"], name: "شركة تأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
-
-        // ========== الخدمات الحكومية ==========
-        { keys: ["ساهر", "المرور"], name: "ساهر", cat: "السيارة والمواصلات", sub: "مخالفات", recurring: false },
-        { keys: ["الاحوال", "أبشر"], name: "أبشر", cat: "فواتير واشتراكات", sub: "خدمات حكومية" },
-        { keys: ["الكهرباء", "السعودية للكهرباء"], name: "السعودية للكهرباء", cat: "فواتير واشتراكات", sub: "كهرباء", recurring: true },
-        { keys: ["المياه", "المياة"], name: "المياه الوطنية", cat: "فواتير واشتراكات", sub: "مياه", recurring: true },
-
-        // ========== التأمين والخدمات المالية ==========
+        // ========== 🛡️ التأمين ==========
         { keys: ["tameeni", "تأميني"], name: "تأميني", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
-        { keys: ["tawuniya", "التعاونية"], name: "التعاونية", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
-        { keys: ["medgulf", "ميدغلف"], name: "ميدغلف", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["tawuniya", "التعاونية"], name: "التعاونية للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["medgulf", "ميدغلف"], name: "ميدغلف للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
         { keys: ["al rajhi takaful", "الراجحي تكافل"], name: "الراجحي تكافل", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
-        { keys: ["bupa", "بوبا"], name: "بوبا", cat: "الصحة والجمال", sub: "تأمين طبي", recurring: true },
-        { keys: ["enaya", "عناية"], name: "عناية", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["bupa", "بوبا"], name: "بوبا العربية", cat: "الصحة والجمال", sub: "تأمين طبي", recurring: true },
+        { keys: ["enaya", "عناية"], name: "عناية للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
         { keys: ["alalamiya", "العالمية"], name: "العالمية للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
-        { keys: ["saico", "سايكو"], name: "سايكو", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["saico", "سايكو"], name: "سايكو للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
         { keys: ["alhlal", "الهلال"], name: "الهلال للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
-        { keys: ["alazm", "العزم"], name: "العزم", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["alazm", "العزم"], name: "العزم للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
         { keys: ["wafa", "وفا"], name: "وفا للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
-        { keys: ["aljazira", "الجزيرة"], name: "تكافل الجزيرة", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["aljazira takaful", "تكافل الجزيرة"], name: "تكافل الجزيرة", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["malath", "ملاذ"], name: "ملاذ للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["walaa", "ولاء"], name: "ولاء للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["acig", "اسيج", "أسيج"], name: "أسيج للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["chubb", "تشب"], name: "تشب العربية للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["gulf union", "اتحاد الخليج"], name: "اتحاد الخليج للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["buruj", "بروج"], name: "بروج للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["salama", "سلامة"], name: "سلامة للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+        { keys: ["al sakr", "الصقر"], name: "الصقر للتأمين", cat: "السيارة والمواصلات", sub: "تأمين", recurring: true },
+
+        // ========== 🎟️ الترفيه والسياحة ==========
+        { keys: ["vox", "فوكس"], name: "فوكس سينما", cat: "المطاعم والكافيهات", sub: "ترفيه وسينما" },
+        { keys: ["amc", "اي ام سي"], name: "AMC سينما", cat: "المطاعم والكافيهات", sub: "ترفيه وسينما" },
+        { keys: ["muvi", "موفي"], name: "موفي سينما", cat: "المطاعم والكافيهات", sub: "ترفيه وسينما" },
+        { keys: ["empire", "امباير"], name: "إمباير سينما", cat: "المطاعم والكافيهات", sub: "ترفيه وسينما" },
+        { keys: ["alhokair", "الحكير"], name: "مجموعة الحكير للترفيه", cat: "المطاعم والكافيهات", sub: "ترفيه" },
+        { keys: ["webook", "ويبوك"], name: "ويبوك (تذاكر)", cat: "المطاعم والكافيهات", sub: "تذاكر فعاليات" },
+        { keys: ["flynas", "ناس", "طيران ناس"], name: "طيران ناس", cat: "السيارة والمواصلات", sub: "سفر وطيران" },
+        { keys: ["flyadeal", "اديل", "طيران اديل"], name: "طيران أديل", cat: "السيارة والمواصلات", sub: "سفر وطيران" },
+        { keys: ["saudia", "الخطوط السعودية", "saudi airlines"], name: "الخطوط السعودية", cat: "السيارة والمواصلات", sub: "سفر وطيران" },
+        { keys: ["almosafer", "المسافر"], name: "المسافر", cat: "السيارة والمواصلات", sub: "حجوزات وسفر" },
+        { keys: ["seera", "سيرا"], name: "مجموعة سيرا", cat: "السيارة والمواصلات", sub: "حجوزات وسفر" },
+        { keys: ["agoda", "اجودا", "أجودا"], name: "أجودا", cat: "السيارة والمواصلات", sub: "حجوزات فنادق" },
+        { keys: ["booking", "بوكينج", "بوكينق"], name: "Booking.com", cat: "السيارة والمواصلات", sub: "حجوزات فنادق" }
     ];
 
     function findMerchantInDictionary(text) {
@@ -1088,6 +1287,9 @@ app.post('/api/raw-sms', authenticateToken, async (req, res) => {
         }
         console.log(`🎉 [Database - Success]: Transaction saved with ID: ${result.insertId}`);
         console.log('=======================================\n');
+        if (type === 'income') {
+            processAutoSavings(userId, amount);
+        }
         res.json({ success: true, id: result.insertId });
     });
 });
