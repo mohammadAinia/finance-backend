@@ -193,23 +193,23 @@ let expo = new Expo();
 // يعمل يوم 1 من كل شهر الساعة 08:00 صباحاً ('0 8 1 * *')
 // ==========================================
 
-cron.schedule('*/2 * * * *', async () => {
+cron.schedule('0 8 1 * *', async () => {
     console.log('⏳ [Monthly Report]: بدء تجميع بيانات التقرير الشهري التلقائي...');
 
     // سنقوم بجلب بيانات المستخدم الأول كمثال (يمكنك تعديلها لاحقاً لعمل Loop لكل المستخدمين)
-    const userId = 1; 
+    const userId = 1;
     // إيميلك المسجل في Resend والذي سيستقبل التقرير
-    const targetEmail = 'mmyyttt@gmail.com'; 
+    const targetEmail = 'mmyyttt@gmail.com';
 
     try {
         // 1. جلب جميع العمليات لحساب الرصيد الكلي وعمليات الشهر الماضي
         const allTransactions = await queryAsync('SELECT * FROM Transactions WHERE UserId = ? ORDER BY TransactionDate DESC', [userId]);
-        
+
         let totalIncome = 0;
         let totalExpense = 0;
         let lastMonthIncome = 0;
         let lastMonthExpense = 0;
-        
+
         const now = new Date();
         const lastMonth = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
         const yearOfLastMonth = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
@@ -219,7 +219,7 @@ cron.schedule('*/2 * * * *', async () => {
         allTransactions.forEach(t => {
             const amt = Number(t.Amount);
             const tDate = new Date(t.TransactionDate);
-            
+
             // الرصيد الكلي
             if (t.Type === 'income') totalIncome += amt;
             else if (t.Type === 'expense') totalExpense += amt;
@@ -229,7 +229,7 @@ cron.schedule('*/2 * * * *', async () => {
                 // فك تشفير الوصف
                 t.Description = decrypt(t.Description);
                 lastMonthTransactions.push(t);
-                
+
                 if (t.Type === 'income') lastMonthIncome += amt;
                 else if (t.Type === 'expense') lastMonthExpense += amt;
             }
@@ -250,7 +250,7 @@ cron.schedule('*/2 * * * *', async () => {
             const limit = Number(b.AmountLimit);
             const percent = limit > 0 ? Math.min((spent / limit) * 100, 100) : 0;
             const color = percent >= 100 ? '#ef4444' : (percent >= 80 ? '#f59e0b' : '#10b981');
-            
+
             return `
                 <div style="margin-bottom: 15px;">
                     <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
@@ -397,7 +397,7 @@ cron.schedule('50 23 28-31 * *', () => {
 
     db.query('SELECT Id FROM Users', (err, users) => {
         if (err) return;
-        
+
         users.forEach(user => {
             const userId = user.Id;
             // التحقق هل لدى المستخدم هدف يقبل ترحيل الفائض؟
@@ -418,10 +418,10 @@ cron.schedule('50 23 28-31 * *', () => {
                         // إذا كان هناك فائض، حوله للهدف
                         if (surplus > 0) {
                             db.query('UPDATE SavingsGoals SET CurrentAmount = CurrentAmount + ? WHERE Id = ?', [surplus, sweepGoal.Id]);
-                            
+
                             const encryptedDesc = encrypt(`تحويل فائض ميزانية الشهر للهدف: ${sweepGoal.GoalName}`);
                             db.query(`INSERT INTO Transactions (UserId, Amount, Type, Category, SubCategory, Description, TransactionDate, PaymentMethod, Source) VALUES (?, ?, 'expense', 'ادخار', 'ترحيل فائض', ?, NOW(), 'System', 'Sweep')`, [userId, surplus, encryptedDesc]);
-                            
+
                             console.log(`✅ [Month-End Sweep]: تم ترحيل مبلغ ${surplus} للمستخدم ${userId}`);
                         }
                     });
@@ -514,11 +514,11 @@ function processAutoSavings(userId, incomeAmount) {
             if (cutAmount > 0) {
                 // 1. زيادة رصيد الهدف
                 db.query('UPDATE SavingsGoals SET CurrentAmount = CurrentAmount + ? WHERE Id = ?', [cutAmount, goal.Id]);
-                
+
                 // 2. تسجيل عملية "مصروف" في المعاملات حتى يتم خصمها من رصيد المحفظة العام
                 const encryptedDesc = encrypt(`ادخار تلقائي (${goal.AutoSavePercentage}%) للهدف: ${goal.GoalName}`);
                 const query = `INSERT INTO Transactions (UserId, Amount, Type, Category, SubCategory, Description, TransactionDate, PaymentMethod, Source) VALUES (?, ?, 'expense', 'ادخار', 'تلقائي', ?, NOW(), 'System', 'AutoSave')`;
-                
+
                 db.query(query, [userId, cutAmount, encryptedDesc]);
             }
         });
@@ -646,7 +646,7 @@ db.query("SHOW COLUMNS FROM SavingsGoals LIKE 'AutoSavePercentage'", (err, res) 
 // 2. تحديث مسار إضافة هدف جديد
 app.post('/api/goals', authenticateToken, (req, res) => {
     const { GoalName, TargetAmount, AutoSavePercentage, SweepSurplus } = req.body;
-    
+
     if (!GoalName || !TargetAmount) {
         return res.status(400).json({ error: 'اسم الهدف والمبلغ المستهدف مطلوبان' });
     }
@@ -1639,8 +1639,8 @@ const transporter = nodemailer.createTransport({
 // ==========================================
 
 app.get('/api/test-email-report', async (req, res) => {
-    const targetEmail = req.query.email; 
-    
+    const targetEmail = req.query.email;
+
     if (!targetEmail) {
         return res.status(400).send('<h2 dir="rtl" style="font-family: sans-serif; text-align: center; color: red;">❌ الرجاء تمرير الإيميل في الرابط</h2>');
     }
@@ -1666,12 +1666,12 @@ app.get('/api/test-email-report', async (req, res) => {
 
         let options = { format: 'A4', printBackground: true };
         let file = { content: htmlContent };
-        
+
         console.log('📄 جاري توليد ملف PDF في الذاكرة...');
         const pdfBuffer = await html_to_pdf.generatePdf(file, options);
 
         console.log('📧 جاري إرسال الإيميل عبر Resend...');
-        
+
         // استخدام Resend لإرسال الإيميل مع المرفق
         const { data, error } = await resend.emails.send({
             from: 'Finance App <onboarding@resend.dev>', // إيميل الاختبار الافتراضي من Resend
