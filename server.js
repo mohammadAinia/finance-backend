@@ -1974,7 +1974,7 @@ app.post('/api/scan-receipt', authenticateToken, async (req, res) => {
                     ]
                 }
             ],
-            model: "llama-3.2-90b-vision-preview", // موديل الرؤية السريع من Groq
+            model: "meta-llama/llama-4-scout-17b-16e-instruct", // 👈 الجيل الرابع الأحدث والأسرع للرؤية
             temperature: 0, // 0 لضمان دقة استخراج الأرقام
             response_format: { type: "json_object" } // إجبار الموديل على إرجاع JSON
         });
