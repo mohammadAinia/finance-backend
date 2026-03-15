@@ -938,7 +938,7 @@ app.get('/api/assets/gold', authenticateToken, async (req, res) => {
 
         // التحقق من صحة البيانات القادمة من الـ API
         // السعر العالمي للأونصة بالدولار
-        const livePricePerOunceUSD = goldData.price || 2700.00;
+        const livePricePerOunceUSD = goldData.price || 5020.00;
         const usdToSar = 3.75;
         const gramsPerOunce = 31.1035;
 
