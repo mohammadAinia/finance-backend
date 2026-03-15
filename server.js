@@ -15,8 +15,9 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const app = express();
 
 app.use(cors());
-app.use(express.json());
-
+// السماح باستقبال بيانات بحجم كبير (للصور)
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_financial_key_2024';
 
 // ==========================================
