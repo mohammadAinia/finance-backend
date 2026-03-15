@@ -868,10 +868,6 @@ app.delete('/api/goals/:id', authenticateToken, (req, res) => {
 
 
 
-
-
-// --- أضف هذه المسارات في server.js ---
-
 // 1. جلب قائمة المشتريات بالتفصيل (للعرض والحذف)
 app.get('/api/assets/gold/list', authenticateToken, (req, res) => {
     const userId = req.user.id;
@@ -1941,6 +1937,53 @@ app.get('/api/test-email-report', async (req, res) => {
     } catch (error) {
         console.error('❌ خطأ داخلي:', error);
         res.status(500).send(`<h2 dir="rtl" style="font-family: sans-serif; text-align: center; color: red;">❌ حدث خطأ: ${error.message}</h2>`);
+    }
+});
+
+// ==========================================
+// 🧾 الماسح الضوئي للفواتير الذكي (Receipt Scanner)
+// ==========================================
+app.post('/api/scan-receipt', authenticateToken, async (req, res) => {
+    const { imageBase64 } = req.body;
+
+    if (!imageBase64) return res.status(400).json({ error: 'لم يتم إرسال أي صورة' });
+
+    try {
+        const Groq = require('groq-sdk');
+        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+        // نطلب من الذكاء الاصطناعي استخراج البيانات كـ JSON حصراً
+        const prompt = `
+        أنت مساعد مالي دقيق. قم بتحليل صورة الفاتورة المرفقة واستخرج منها 3 معلومات فقط:
+        1. المبلغ الإجمالي (رقم فقط).
+        2. اسم المتجر أو وصف العملية.
+        3. تصنيف مقترح للعملية (مثال: طعام، تسوق، مواصلات، فواتير).
+        
+        يجب أن يكون ردك حصراً بصيغة JSON صحيحة بهذا الشكل بالضبط ولا تكتب أي حرف آخر:
+        {"amount": 150.50, "description": "اسم المتجر", "category": "طعام"}
+        `;
+
+        const chatCompletion = await groq.chat.completions.create({
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        { type: "text", text: prompt },
+                        { type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}` } }
+                    ]
+                }
+            ],
+            model: "llama-3.2-11b-vision-preview", // موديل الرؤية السريع من Groq
+            temperature: 0, // 0 لضمان دقة استخراج الأرقام
+            response_format: { type: "json_object" } // إجبار الموديل على إرجاع JSON
+        });
+
+        const extractedData = JSON.parse(chatCompletion.choices[0].message.content);
+        res.json(extractedData);
+
+    } catch (error) {
+        console.error('❌ Scanner Error:', error);
+        res.status(500).json({ error: 'فشل في تحليل الفاتورة' });
     }
 });
 
