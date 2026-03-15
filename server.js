@@ -132,6 +132,18 @@ db.connect((err) => {
         )
     `;
 
+    const createAchievementsTable = `
+        CREATE TABLE IF NOT EXISTS UserAchievements (
+            Id INT AUTO_INCREMENT PRIMARY KEY,
+            UserId INT NOT NULL,
+            BadgeId VARCHAR(50) NOT NULL,
+            UnlockedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY unique_user_badge (UserId, BadgeId),
+            FOREIGN KEY (UserId) REFERENCES Users(Id) ON DELETE CASCADE
+        )
+    `;
+
+
     // Execute queries sequentially
     db.query(createUsersTable, (err) => {
         if (err) console.error('❌ Error creating Users table:', err.message);
@@ -161,6 +173,10 @@ db.connect((err) => {
                 }
             });
         }
+    });
+
+    db.query(createAchievementsTable, (err) => {
+        if (err) console.error("❌ Error creating UserAchievements table:", err);
     });
 });
 // دالة مساعدة لتحويل استعلامات قاعدة البيانات لتتوافق مع async/await
@@ -1985,6 +2001,51 @@ app.post('/api/scan-receipt', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error('❌ Scanner Error:', error);
         res.status(500).json({ error: 'فشل في تحليل الفاتورة' });
+    }
+});
+
+// ==========================================
+// 🏆 نظام الإنجازات والأوسمة
+// ==========================================
+app.get('/api/achievements', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
+
+    try {
+        // 1. جلب بيانات المستخدم لتقييمها
+        const [transactions, goals, gold] = await Promise.all([
+            new Promise((resolve) => db.query('SELECT COUNT(*) as count FROM Transactions WHERE UserId = ?', [userId], (err, res) => resolve(res[0]?.count || 0))),
+            new Promise((resolve) => db.query('SELECT * FROM Goals WHERE UserId = ?', [userId], (err, res) => resolve(res || []))),
+            new Promise((resolve) => db.query('SELECT COUNT(*) as count FROM Assets WHERE UserId = ? AND AssetType = "Gold"', [userId], (err, res) => resolve(res[0]?.count || 0)))
+        ]);
+
+        const earnedBadges = [];
+
+        // 🌟 وسام: البداية الذكية (أول عملية)
+        if (transactions > 0) earnedBadges.push('smart_start');
+
+        // 🎯 وسام: قناص الأهداف (حقق هدفاً واحداً على الأقل بنسبة 100%)
+        const completedGoals = goals.some(g => parseFloat(g.CurrentAmount) >= parseFloat(g.TargetAmount));
+        if (completedGoals) earnedBadges.push('goal_sniper');
+
+        // 🥇 وسام: مستثمر الذهب (أضاف ذهباً للمحفظة)
+        if (gold > 0) earnedBadges.push('gold_investor');
+
+        // 2. إدخال الأوسمة الجديدة في قاعدة البيانات (تجاهل إذا كانت موجودة مسبقاً بفضل UNIQUE KEY)
+        if (earnedBadges.length > 0) {
+            const values = earnedBadges.map(badge => [userId, badge]);
+            const insertQuery = `INSERT IGNORE INTO UserAchievements (UserId, BadgeId) VALUES ?`;
+            db.query(insertQuery, [values]); // إدخال جماعي متجاهلاً المكرر
+        }
+
+        // 3. جلب كل أوسمة المستخدم لإرسالها للفرونت إند
+        db.query('SELECT BadgeId, UnlockedAt FROM UserAchievements WHERE UserId = ? ORDER BY UnlockedAt DESC', [userId], (err, results) => {
+            if (err) return res.status(500).json({ error: 'Database error' });
+            res.json(results);
+        });
+
+    } catch (error) {
+        console.error('Achievements Evaluation Error:', error);
+        res.status(500).json({ error: 'Server error during evaluation' });
     }
 });
 
