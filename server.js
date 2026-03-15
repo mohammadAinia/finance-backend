@@ -1974,7 +1974,7 @@ app.post('/api/scan-receipt', authenticateToken, async (req, res) => {
                     ]
                 }
             ],
-            model: "meta-llama/llama-4-scout-17b-16e-instruct", // 👈 الجيل الرابع الأحدث والأسرع للرؤية
+            model: "meta-llama/llama-4-scout-17b-16e-instruct",
             temperature: 0, // 0 لضمان دقة استخراج الأرقام
             response_format: { type: "json_object" } // إجبار الموديل على إرجاع JSON
         });
