@@ -718,7 +718,39 @@ app.get('/api/auth/mobile-token', authenticateToken, (req, res) => {
     res.json({ mobileToken });
 });
 
+// ==========================================
+// 👤 مسار جلب بيانات المستخدم (الملف الشخصي)
+// ==========================================
+app.get('/api/user/profile', authenticateToken, (req, res) => {
+    db.query('SELECT Username, Role FROM Users WHERE Id = ?', [req.user.id], (err, results) => {
+        if (err || results.length === 0) return res.status(500).json({ error: 'Database error' });
+        res.json({ username: results[0].Username, role: results[0].Role });
+    });
+});
 
+// ==========================================
+// 🔐 مسار تغيير كلمة المرور
+// ==========================================
+app.put('/api/user/change-password', authenticateToken, async (req, res) => {
+    const { oldPassword, newPassword } = req.body;
+    
+    if (!oldPassword || !newPassword) return res.status(400).json({ error: 'مطلوب إدخال كلمة المرور القديمة والجديدة' });
+
+    db.query('SELECT PasswordHash FROM Users WHERE Id = ?', [req.user.id], async (err, results) => {
+        if (err || results.length === 0) return res.status(500).json({ error: 'Database error' });
+
+        const isMatch = await bcrypt.compare(oldPassword, results[0].PasswordHash);
+        if (!isMatch) return res.status(400).json({ error: 'كلمة المرور القديمة غير صحيحة' });
+
+        const salt = await bcrypt.genSalt(10);
+        const newHash = await bcrypt.hash(newPassword, salt);
+
+        db.query('UPDATE Users SET PasswordHash = ? WHERE Id = ?', [newHash, req.user.id], (updateErr) => {
+            if (updateErr) return res.status(500).json({ error: 'Failed to update password' });
+            res.json({ success: true, message: 'تم تغيير كلمة المرور بنجاح' });
+        });
+    });
+});
 
 
 
