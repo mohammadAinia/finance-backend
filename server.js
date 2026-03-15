@@ -2015,7 +2015,7 @@ app.get('/api/achievements', authenticateToken, async (req, res) => {
         const [transactions, goals, gold] = await Promise.all([
             new Promise((resolve) => db.query('SELECT COUNT(*) as count FROM Transactions WHERE UserId = ?', [userId], (err, res) => resolve(res[0]?.count || 0))),
             new Promise((resolve) => db.query('SELECT * FROM Goals WHERE UserId = ?', [userId], (err, res) => resolve(res || []))),
-            new Promise((resolve) => db.query('SELECT COUNT(*) as count FROM Assets WHERE UserId = ? AND AssetType = "Gold"', [userId], (err, res) => resolve(res[0]?.count || 0)))
+            new Promise((resolve) => db.query("SELECT COUNT(*) as count FROM Assets WHERE UserId = ? AND AssetType = 'Gold'", [userId], (err, res) => resolve(res[0]?.count || 0)))
         ]);
 
         const earnedBadges = [];
